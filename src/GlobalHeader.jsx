@@ -18,17 +18,19 @@ export default function GlobalHeader({ breadcrumb, description, center, right })
     <div
       style={{
         background: C.bg,
-        borderBottom: `1px solid ${C.border}`,
+        boxShadow: "0 1px 0 rgba(255,255,255,0.04), 0 4px 20px rgba(0,0,0,0.4)",
         flexShrink: 0,
+        position: "relative",
+        zIndex: 10,
       }}
     >
       {/* ── Main bar ──────────────────────────────────────────────────────── */}
       <div
         style={{
-          height: 44,
+          height: 52,
           display: "flex",
           alignItems: "center",
-          padding: "0 20px",
+          padding: "0 24px",
           gap: 16,
         }}
       >
@@ -103,12 +105,12 @@ export default function GlobalHeader({ breadcrumb, description, center, right })
       {(breadcrumb || description) && (
         <div
           style={{
-            height: 28,
+            height: 26,
             display: "flex",
             alignItems: "center",
-            padding: "0 20px",
+            padding: "0 24px",
             gap: 12,
-            borderTop: `1px solid ${C.border}88`,
+            borderTop: `1px solid rgba(255,255,255,0.04)`,
           }}
         >
           {/* Breadcrumb */}

@@ -437,12 +437,11 @@ export default function TaxonomyMenu() {
               top: Math.max(tooltip.y - 110, 8),
               width: 242,
               background: "#141b2d",
-              border: `1px solid ${NODE_INFO[tooltip.label].color}44`,
-              borderRadius: 10,
-              padding: "11px 14px",
+              borderRadius: 12,
+              padding: "13px 15px",
               pointerEvents: "none",
               zIndex: 100,
-              boxShadow: `0 8px 32px rgba(0,0,0,0.6), 0 0 0 1px ${NODE_INFO[tooltip.label].color}22`,
+              boxShadow: `0 12px 40px rgba(0,0,0,0.7), inset 0 0 0 1px rgba(255,255,255,0.08)`,
             }}
           >
             <div style={{ fontSize: 11, fontWeight: 700, color: NODE_INFO[tooltip.label].color, marginBottom: 8, fontFamily: "'JetBrains Mono',monospace" }}>
@@ -473,8 +472,8 @@ export default function TaxonomyMenu() {
         style={{
           marginTop: 32,
           width: "min(520px, 90vw)",
-          border: `1.5px dashed ${dragOver ? C.blue : C.border}`,
-          borderRadius: 12,
+          border: `1.5px dashed ${dragOver ? C.blue : "rgba(255,255,255,0.1)"}`,
+          borderRadius: 14,
           padding: "20px 28px",
           display: "flex",
           alignItems: "center",
@@ -519,7 +518,7 @@ export default function TaxonomyMenu() {
       {/* ── How it works ─────────────────────────────────────────────────────── */}
       <div style={{ marginTop: 64, marginBottom: 64, width: "min(760px, 90vw)" }}>
         <div style={{ textAlign: "center", marginBottom: 32 }}>
-          <span style={{ fontSize: 10, color: C.dimmer, letterSpacing: "0.15em", textTransform: "uppercase" }}>
+          <span style={{ fontSize: 10, color: C.dimmer, letterSpacing: "0.06em" }}>
             How it works
           </span>
         </div>
@@ -553,18 +552,18 @@ export default function TaxonomyMenu() {
                 flex: "1 1 200px",
                 maxWidth: 230,
                 background: C.panel,
-                border: `1px solid ${C.border}`,
-                borderRadius: 12,
-                padding: "22px 20px",
+                borderRadius: 16,
+                padding: "22px 22px",
                 display: "flex",
                 flexDirection: "column",
                 gap: 12,
+                boxShadow: "0 4px 24px rgba(0,0,0,0.4), inset 0 0 0 1px rgba(255,255,255,0.05)",
               }}
             >
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 {icon}
-                <span style={{ fontSize: 10, color: C.dimmer, fontWeight: 700, letterSpacing: "0.08em" }}>
-                  STEP {step}
+                <span style={{ fontSize: 9, color: C.dimmer, fontWeight: 400 }}>
+                  Step {step}
                 </span>
               </div>
               <div style={{ fontSize: 12, fontWeight: 700, color }}>
@@ -581,7 +580,7 @@ export default function TaxonomyMenu() {
       {/* ── Footer ───────────────────────────────────────────────────────────── */}
       <footer
         style={{
-          borderTop: `1px solid ${C.border}`,
+          boxShadow: "0 -1px 0 rgba(255,255,255,0.04)",
           width: "100%",
           padding: "18px 24px",
           display: "flex",
@@ -632,11 +631,10 @@ export default function TaxonomyMenu() {
             id="coming-soon-popup"
             style={{
               background: "#141b2d",
-              border: `1px solid ${C.border}`,
-              borderRadius: 14,
+              borderRadius: 16,
               padding: "28px 32px",
               width: "min(380px, 90vw)",
-              boxShadow: "0 24px 64px rgba(0,0,0,0.7)",
+              boxShadow: "0 24px 64px rgba(0,0,0,0.7), inset 0 0 0 1px rgba(255,255,255,0.08)",
               fontFamily: "'JetBrains Mono',monospace",
             }}
           >
@@ -677,29 +675,30 @@ export default function TaxonomyMenu() {
                   onKeyDown={(e) => e.key === "Enter" && notifyEmail && setNotifyDone(true)}
                   style={{
                     flex: 1,
-                    background: C.panel,
-                    border: `1px solid ${C.border}`,
-                    borderRadius: 7,
+                    background: "rgba(255,255,255,0.05)",
+                    border: "none",
+                    borderRadius: 9,
                     color: C.text,
                     fontSize: 11,
                     padding: "8px 12px",
                     fontFamily: "'JetBrains Mono',monospace",
                     outline: "none",
+                    boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.1)",
                   }}
                 />
                 <button
                   onClick={() => notifyEmail && setNotifyDone(true)}
                   style={{
-                    background: notifyEmail ? C.accent : C.dimmer,
+                    background: notifyEmail ? C.accent : "rgba(255,255,255,0.08)",
                     border: "none",
-                    borderRadius: 7,
-                    color: "#000",
+                    borderRadius: 9,
+                    color: notifyEmail ? "#000" : C.dimmer,
                     fontSize: 11,
                     fontWeight: 700,
                     cursor: notifyEmail ? "pointer" : "default",
                     padding: "8px 14px",
                     fontFamily: "'JetBrains Mono',monospace",
-                    transition: "background 0.15s",
+                    transition: "background 0.15s ease-out, color 0.15s ease-out",
                   }}
                 >
                   Notify me

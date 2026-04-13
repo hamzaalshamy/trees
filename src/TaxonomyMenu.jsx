@@ -73,9 +73,9 @@ const NODE_DELAYS = {
 };
 
 // ─── Sub-components ─────────────────────────────────────────────────────────────
-function AnimEdge({ x1, y1, x2, y2, label, grayed, delay }) {
-  const strokeColor = grayed ? C.dimmer : C.edge;
-  const labelColor  = grayed ? C.dimmer : C.dim;
+function AnimEdge({ x1, y1, x2, y2, label, grayed, delay, hovered }) {
+  const strokeColor = grayed ? C.dimmer : (hovered ? C.dim : C.edge);
+  const labelColor  = grayed ? C.dimmer : (hovered ? C.text : C.dim);
   const len = Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
   const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
   const dx = x2 - x1, dy = y2 - y1;
@@ -83,7 +83,7 @@ function AnimEdge({ x1, y1, x2, y2, label, grayed, delay }) {
   const labelX = mx + nx * 14, labelY = my + ny * 14;
 
   return (
-    <g opacity={grayed ? 0.35 : 0.85}>
+    <g opacity={grayed ? 0.35 : (hovered ? 1 : 0.85)} style={{ transition: "opacity 0.2s" }}>
       {grayed ? (
         <path
           d={`M${x1},${y1} L${x2},${y2}`}
@@ -97,12 +97,13 @@ function AnimEdge({ x1, y1, x2, y2, label, grayed, delay }) {
         <path
           d={`M${x1},${y1} L${x2},${y2}`}
           stroke={strokeColor}
-          strokeWidth={1.8}
+          strokeWidth={hovered ? 2.4 : 1.8}
           fill="none"
           style={{
             strokeDasharray: len,
             strokeDashoffset: len,
             animation: `taxDrawEdge 0.55s cubic-bezier(0.4,0,0.2,1) ${delay}s forwards`,
+            transition: "stroke-width 0.2s, stroke 0.2s",
           }}
         />
       )}
@@ -138,6 +139,9 @@ function ActiveNode({ label, onHover, onHoverEnd, onClick, animDelay }) {
         cursor: "pointer",
         opacity: 0,
         animation: `taxFadeIn 0.4s ease ${animDelay}s forwards`,
+        transform: localHovered ? "scale(1.05)" : "scale(1)",
+        transformOrigin: `${cx}px ${cy}px`,
+        transition: "transform 0.18s cubic-bezier(0.34,1.56,0.64,1)",
       }}
     >
       <rect
@@ -187,7 +191,10 @@ function GrayNode({ label, onComingSoon, animDelay }) {
       style={{
         cursor: "pointer",
         opacity: 0,
-        animation: `taxFadeIn 0.4s ease ${animDelay}s forwards`,
+        animation: localHovered
+          ? `taxFadeIn 0.4s ease ${animDelay}s forwards, taxShake 0.38s ease`
+          : `taxFadeIn 0.4s ease ${animDelay}s forwards`,
+        transformOrigin: `${cx}px ${cy}px`,
       }}
     >
       <rect
@@ -219,30 +226,42 @@ function GrayNode({ label, onComingSoon, animDelay }) {
 function IconPick() {
   return (
     <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-      <circle cx="14" cy="14" r="13" stroke={C.accent} strokeWidth="1.5" opacity="0.5" />
-      <path d="M10 14 L14 10 L18 14" stroke={C.accent} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M14 10 L14 19" stroke={C.accent} strokeWidth="1.5" strokeLinecap="round" />
+      {/* Root node */}
+      <circle cx="14" cy="7" r="3.5" stroke={C.accent} strokeWidth="1.4" fill={`${C.accent}18`} />
+      {/* Left edge */}
+      <line x1="11" y1="9.5" x2="7.5" y2="16.5" stroke={C.accent} strokeWidth="1.2" opacity="0.65" strokeLinecap="round" />
+      {/* Right edge */}
+      <line x1="17" y1="9.5" x2="20.5" y2="16.5" stroke={C.accent} strokeWidth="1.2" opacity="0.65" strokeLinecap="round" />
+      {/* Left leaf */}
+      <rect x="3" y="17.5" width="9" height="5.5" rx="2" stroke={C.accent} strokeWidth="1.2" fill={`${C.accent}20`} />
+      {/* Right leaf */}
+      <rect x="16" y="17.5" width="9" height="5.5" rx="2" stroke={C.accent} strokeWidth="1.2" fill={`${C.accent}20`} />
     </svg>
   );
 }
 function IconWatch() {
   return (
     <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-      <circle cx="14" cy="14" r="13" stroke={C.green} strokeWidth="1.5" opacity="0.5" />
-      <circle cx="14" cy="10" r="2" fill={C.green} opacity="0.8" />
-      <circle cx="9"  cy="18" r="2" fill={C.green} opacity="0.8" />
-      <circle cx="19" cy="18" r="2" fill={C.green} opacity="0.8" />
-      <line x1="14" y1="12" x2="10" y2="16" stroke={C.green} strokeWidth="1.2" opacity="0.6" />
-      <line x1="14" y1="12" x2="18" y2="16" stroke={C.green} strokeWidth="1.2" opacity="0.6" />
+      {/* Node box */}
+      <rect x="7" y="9" width="14" height="10" rx="2.5" stroke={C.green} strokeWidth="1.4" fill={`${C.green}14`} />
+      {/* Interior rule line */}
+      <line x1="10" y1="14" x2="18" y2="14" stroke={C.green} strokeWidth="1" opacity="0.45" />
+      {/* Left step arrow */}
+      <path d="M5 14 L2.5 14 M2.5 14 L4.5 12.2 M2.5 14 L4.5 15.8" stroke={C.green} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" opacity="0.7" />
+      {/* Right step arrow */}
+      <path d="M23 14 L25.5 14 M25.5 14 L23.5 12.2 M25.5 14 L23.5 15.8" stroke={C.green} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" opacity="0.7" />
     </svg>
   );
 }
 function IconUpload() {
   return (
     <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-      <circle cx="14" cy="14" r="13" stroke={C.blue} strokeWidth="1.5" opacity="0.5" />
-      <rect x="9" y="14" width="10" height="7" rx="1.5" stroke={C.blue} strokeWidth="1.4" opacity="0.7" />
-      <path d="M14 13 L14 7 M11 10 L14 7 L17 10" stroke={C.blue} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      {/* Document body */}
+      <path d="M7 4 L18 4 L22 8 L22 24 L7 24 Z" stroke={C.blue} strokeWidth="1.4" fill={`${C.blue}12`} strokeLinejoin="round" />
+      {/* Folded corner */}
+      <path d="M18 4 L18 8 L22 8" stroke={C.blue} strokeWidth="1.2" fill="none" opacity="0.6" strokeLinejoin="round" />
+      {/* Upward arrow */}
+      <path d="M14.5 20 L14.5 13 M12 15 L14.5 13 L17 15" stroke={C.blue} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -255,7 +274,9 @@ export default function TaxonomyMenu() {
   const [notifyEmail, setNotifyEmail] = useState("");
   const [notifyDone, setNotifyDone]   = useState(false);
   const [dragOver, setDragOver]       = useState(false);
+  const [cardsVisible, setCardsVisible] = useState(false);
   const fileInputRef = useRef(null);
+  const cardsRef     = useRef(null);
 
   // Inject CSS keyframes
   useEffect(() => {
@@ -271,9 +292,12 @@ export default function TaxonomyMenu() {
         50%  { background-position: 100% 50%; }
         100% { background-position: 0%   50%; }
       }
-      @keyframes taxDropPulse {
-        0%, 100% { border-color: ${C.blue}66; }
-        50%       { border-color: ${C.blue}cc; }
+      @keyframes taxShake {
+        0%, 100% { transform: translateX(0); }
+        20%      { transform: translateX(-4px); }
+        40%      { transform: translateX(4px); }
+        60%      { transform: translateX(-2.5px); }
+        80%      { transform: translateX(2.5px); }
       }
     `;
     document.head.appendChild(style);
@@ -306,6 +330,18 @@ export default function TaxonomyMenu() {
     setTooltip(null);
   }, []);
 
+  // Scroll-in animation for How it Works cards — fires once, then disconnects
+  useEffect(() => {
+    const el = cardsRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) { setCardsVisible(true); obs.disconnect(); } },
+      { threshold: 0.15 }
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
+
   // Close coming-soon on outside click
   useEffect(() => {
     if (!comingSoon) return;
@@ -324,6 +360,7 @@ export default function TaxonomyMenu() {
     <div
       style={{
         minHeight: "100vh",
+        position: "relative",
         background: C.bg,
         backgroundImage: `radial-gradient(circle, rgba(255,255,255,0.038) 1px, transparent 1px)`,
         backgroundSize: "28px 28px",
@@ -339,6 +376,7 @@ export default function TaxonomyMenu() {
       <div style={{ width: "100%", flexShrink: 0 }}>
         <GlobalHeader />
       </div>
+
 
       {/* ── Hero ────────────────────────────────────────────────────────────── */}
       <div style={{ padding: "32px 24px 0", textAlign: "center", maxWidth: 640 }}>
@@ -367,20 +405,33 @@ export default function TaxonomyMenu() {
           <br />
           <span style={{ color: C.dim }}>Bring your own data.</span>
         </p>
+        <p style={{ fontSize: 10.5, color: C.dimmer, margin: "14px 0 0", letterSpacing: "0.02em" }}>
+          Decision Tree · Bagging · Random Forest — 3 algorithms live, 2 coming soon
+        </p>
       </div>
 
       {/* ── Taxonomy SVG ────────────────────────────────────────────────────── */}
       <div style={{ marginTop: 32, position: "relative", width: `min(${VBW}px, 96vw)` }}>
+        {/* Radial glow centered on Decision Tree node (~50% x, ~16% y of viewBox) */}
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            background: `radial-gradient(ellipse 55% 28% at 50% 16%, ${C.accent}12 0%, ${C.green}07 42%, transparent 70%)`,
+            pointerEvents: "none",
+            zIndex: 0,
+          }}
+        />
         <svg
           viewBox={`0 0 ${VBW} ${VBH}`}
-          style={{ width: "100%", overflow: "visible", display: "block" }}
+          style={{ width: "100%", overflow: "visible", display: "block", position: "relative", zIndex: 1 }}
         >
           <defs>
-            <filter id="glow-amber" x="-60%" y="-60%" width="220%" height="220%">
-              <feDropShadow dx="0" dy="0" stdDeviation="6" floodColor={C.accent} floodOpacity="0.5" />
+            <filter id="glow-amber" x="-80%" y="-80%" width="260%" height="260%">
+              <feDropShadow dx="0" dy="0" stdDeviation="9" floodColor={C.accent} floodOpacity="0.65" />
             </filter>
-            <filter id="glow-green" x="-60%" y="-60%" width="220%" height="220%">
-              <feDropShadow dx="0" dy="0" stdDeviation="6" floodColor={C.green} floodOpacity="0.5" />
+            <filter id="glow-green" x="-80%" y="-80%" width="260%" height="260%">
+              <feDropShadow dx="0" dy="0" stdDeviation="9" floodColor={C.green} floodOpacity="0.65" />
             </filter>
             <style>{`
               @keyframes taxDrawEdge { to { stroke-dashoffset: 0; } }
@@ -401,6 +452,7 @@ export default function TaxonomyMenu() {
                 x1={x1} y1={y1 + srcH / 2}
                 x2={x2} y2={y2 - dstH / 2}
                 label={e.label} grayed={e.grayed} delay={e.delay}
+                hovered={!e.grayed && (e.from === tooltip?.label || e.to === tooltip?.label)}
               />
             );
           })}
@@ -472,16 +524,16 @@ export default function TaxonomyMenu() {
         style={{
           marginTop: 32,
           width: "min(520px, 90vw)",
-          border: `1.5px dashed ${dragOver ? C.blue : "rgba(255,255,255,0.1)"}`,
+          border: `1.5px solid ${dragOver ? C.blue : "rgba(255,255,255,0.1)"}`,
           borderRadius: 14,
           padding: "20px 28px",
           display: "flex",
           alignItems: "center",
           gap: 18,
           cursor: "pointer",
-          background: dragOver ? "#0d1829" : "transparent",
+          background: dragOver ? "#0d1829" : "rgba(255,255,255,0.015)",
           transition: "border-color 0.2s, background 0.2s",
-          animation: dragOver ? "taxDropPulse 0.8s ease infinite" : undefined,
+          boxShadow: dragOver ? `0 0 0 3px ${C.blue}22` : "none",
         }}
       >
         <div style={{ flexShrink: 0 }}>
@@ -493,7 +545,7 @@ export default function TaxonomyMenu() {
         </div>
         <div>
           <div style={{ fontSize: 12, color: dragOver ? C.text : C.dim }}>
-            {dragOver ? "Drop to load dataset" : "Or drop a CSV to visualize your own data"}
+            {dragOver ? "Drop to load dataset" : "Have your own dataset? Drop a CSV and watch your data come alive."}
           </div>
           <div style={{ fontSize: 10, color: C.dimmer, marginTop: 5 }}>
             <span style={{ marginRight: 10 }}>
@@ -518,11 +570,11 @@ export default function TaxonomyMenu() {
       {/* ── How it works ─────────────────────────────────────────────────────── */}
       <div style={{ marginTop: 64, marginBottom: 64, width: "min(760px, 90vw)" }}>
         <div style={{ textAlign: "center", marginBottom: 32 }}>
-          <span style={{ fontSize: 10, color: C.dimmer, letterSpacing: "0.06em" }}>
+          <span style={{ fontSize: 12, color: C.text, fontWeight: 600, letterSpacing: "0.04em" }}>
             How it works
           </span>
         </div>
-        <div style={{ display: "flex", gap: 20, flexWrap: "wrap", justifyContent: "center" }}>
+        <div ref={cardsRef} style={{ display: "flex", gap: 20, flexWrap: "wrap", justifyContent: "center" }}>
           {[
             {
               icon: <IconPick />,
@@ -545,7 +597,7 @@ export default function TaxonomyMenu() {
               body: "Drop any CSV — the visualizer parses it, lets you pick the target column, handles missing values, and rebuilds the forest instantly.",
               color: C.blue,
             },
-          ].map(({ icon, step, title, body, color }) => (
+          ].map(({ icon, step, title, body, color }, idx) => (
             <div
               key={step}
               style={{
@@ -558,6 +610,9 @@ export default function TaxonomyMenu() {
                 flexDirection: "column",
                 gap: 12,
                 boxShadow: "0 4px 24px rgba(0,0,0,0.4), inset 0 0 0 1px rgba(255,255,255,0.05)",
+                opacity: cardsVisible ? 1 : 0,
+                transform: cardsVisible ? "translateY(0)" : "translateY(20px)",
+                transition: `opacity 0.5s ease ${idx * 0.1}s, transform 0.5s ease ${idx * 0.1}s`,
               }}
             >
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -584,6 +639,7 @@ export default function TaxonomyMenu() {
           width: "100%",
           padding: "18px 24px",
           display: "flex",
+          flexDirection: "column",
           justifyContent: "center",
           alignItems: "center",
           gap: 6,
@@ -591,19 +647,31 @@ export default function TaxonomyMenu() {
           color: C.dimmer,
         }}
       >
-        Built by{" "}
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          Built by{" "}
+          <a
+            href="https://github.com/hamzaalshamy"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: C.dim, textDecoration: "none", borderBottom: `1px solid ${C.border}` }}
+            onMouseEnter={(e) => { e.target.style.color = C.text; e.target.style.borderBottomColor = C.dim; }}
+            onMouseLeave={(e) => { e.target.style.color = C.dim; e.target.style.borderBottomColor = C.border; }}
+          >
+            Hamza Alshamy
+          </a>
+          <span style={{ opacity: 0.5 }}>·</span>
+          <span style={{ opacity: 0.5 }}>Open source</span>
+        </div>
         <a
-          href="https://github.com/hamzaalshamy"
+          href="https://hamzaalshamy.github.io"
           target="_blank"
           rel="noopener noreferrer"
-          style={{ color: C.dim, textDecoration: "none", borderBottom: `1px solid ${C.border}` }}
-          onMouseEnter={(e) => { e.target.style.color = C.text; e.target.style.borderBottomColor = C.dim; }}
-          onMouseLeave={(e) => { e.target.style.color = C.dim; e.target.style.borderBottomColor = C.border; }}
+          style={{ color: C.dimmer, textDecoration: "none", fontSize: 10.5, opacity: 0.7 }}
+          onMouseEnter={(e) => { e.target.style.color = C.dim; e.target.style.opacity = 1; }}
+          onMouseLeave={(e) => { e.target.style.color = C.dimmer; e.target.style.opacity = 0.7; }}
         >
-          Hamza Alshamy
+          hamzaalshamy.github.io
         </a>
-        <span style={{ marginLeft: 8, opacity: 0.5 }}>·</span>
-        <span style={{ marginLeft: 8, opacity: 0.5 }}>Open source</span>
       </footer>
 
       {/* ── Coming soon popup ────────────────────────────────────────────────── */}

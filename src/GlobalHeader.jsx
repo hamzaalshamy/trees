@@ -11,7 +11,7 @@ import { C } from "./theme";
  *   center      – ReactNode rendered in the middle of the main bar (dataset badge on algorithm pages)
  *   right       – ReactNode rendered on the right side (Upload CSV button, reset button, etc.)
  */
-export default function GlobalHeader({ breadcrumb, description, center, right }) {
+export default function GlobalHeader({ breadcrumb, description, detail, center, right }) {
   const navigate = useNavigate();
 
   return (
@@ -173,6 +173,21 @@ export default function GlobalHeader({ breadcrumb, description, center, right })
               {description}
             </span>
           )}
+        </div>
+      )}
+
+      {/* ── Dataset detail row (algorithm pages only) ─────────────────────── */}
+      {detail && (
+        <div
+          style={{
+            height: 28,
+            display: "flex",
+            alignItems: "center",
+            padding: "0 24px",
+            borderTop: `1px solid rgba(255,255,255,0.03)`,
+          }}
+        >
+          {detail}
         </div>
       )}
     </div>

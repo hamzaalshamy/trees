@@ -14,6 +14,19 @@ const FEATURE_SUBSET_OPTIONS = {
   all:  { label: "p (all)",   fn: (p) => p },
 };
 
+// ─── Class color palette ───────────────────────────────────────────────────────
+// Index 0 = blue, index 1 = pink — preserves binary heart-disease appearance.
+// For 3+ classes the remaining slots provide visually distinct hues.
+const CLASS_PALETTE = [
+  C.blue, C.leafB, C.green, C.accent, C.purple,
+  "#06b6d4", "#f472b6", "#84cc16", "#fb923c", "#a3e635",
+];
+
+function classColor(cls, allClasses) {
+  const idx = allClasses.indexOf(cls);
+  return idx >= 0 ? CLASS_PALETTE[idx % CLASS_PALETTE.length] : C.dim;
+}
+
 // ─── Tree helpers ──────────────────────────────────────────────────────────────
 function flattenNodes(node, id = "0") {
   node.id = id;
@@ -25,11 +38,16 @@ function flattenNodes(node, id = "0") {
   return nodes;
 }
 
+// Aggregate classCounts across all leaves; return the class with the highest total.
 function getTreePrediction(node) {
   const leaves = flattenNodes(node).filter(n => n.type === "leaf");
-  let totalA = 0, totalB = 0;
-  leaves.forEach(l => { totalA += l.classA; totalB += l.classB; });
-  return totalA >= totalB ? "A" : "B";
+  const totals = {};
+  leaves.forEach(l => {
+    Object.entries(l.classCounts).forEach(([cls, cnt]) => {
+      totals[cls] = (totals[cls] ?? 0) + cnt;
+    });
+  });
+  return Object.entries(totals).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "?";
 }
 
 // Count actual leaf nodes so width scales with real tree shape, not worst-case depth.
@@ -101,25 +119,37 @@ function Edge({ p1, p2, visible, label }) {
   );
 }
 
-function TreeNode({ node, show, phase, pos, labelA, labelB }) {
+function TreeNode({ node, show, phase, pos, allClasses }) {
   if (!show || !pos) return null;
   const { x, y } = pos;
 
-  // ── Leaf node — unchanged behaviour (invisible at phase 0, full reveal at phase 1) ──
+  // ── Leaf node ─────────────────────────────────────────────────────────────
   if (node.type === "leaf") {
     const vis = phase >= 1 ? 1 : 0;
-    const r = node.samples > 0 ? node.classA / node.samples : 0.5;
-    const leafLabel = node.prediction === "A" ? labelA : labelB;
-    const displayLabel = leafLabel.length > 11 ? leafLabel.slice(0, 10) + "…" : leafLabel;
+    const predColor = classColor(node.prediction, allClasses);
+    const displayLabel = node.prediction.length > 11 ? node.prediction.slice(0, 10) + "…" : node.prediction;
+
+    // Build stacked class-distribution bar segments
+    const BAR_W = 56, barX0 = x - 28;
+    let xCursor = barX0;
+    const barSegs = allClasses.map(cls => {
+      const count = node.classCounts?.[cls] ?? 0;
+      const w = node.samples > 0 ? Math.max(0, (count / node.samples) * BAR_W) : 0;
+      const rx = xCursor;
+      xCursor += w;
+      return w > 0 ? <rect key={cls} x={rx} y={y + 2} width={w} height={5} fill={classColor(cls, allClasses)} /> : null;
+    });
+
     return (
       <g style={{ opacity: vis, transition: "opacity .45s ease-out", transformOrigin: `${x}px ${y}px`, animation: vis ? "nodeIn 0.35s ease-out" : "none" }}>
         <rect x={x - 38} y={y - 24} width={76} height={50} rx={11}
-          fill={C.panel} stroke={node.prediction === "A" ? `${C.blue}88` : `${C.leafB}88`} strokeWidth={1.4} filter="url(#lg)" />
+          fill={C.panel} stroke={`${predColor}88`} strokeWidth={1.4} filter="url(#lg)" />
         <text x={x} y={y - 9} textAnchor="middle" fill={C.text} fontSize={9}
           fontFamily="'JetBrains Mono',monospace" fontWeight={600}>
           {displayLabel}</text>
-        <rect x={x - 28} y={y + 2}  width={56}                     height={5} rx={2.5} fill={C.leafB} opacity={0.35} />
-        <rect x={x - 28} y={y + 2}  width={Math.max(0, 56 * r)}    height={5} rx={2.5} fill={C.blue} />
+        {/* Background track */}
+        <rect x={barX0} y={y + 2} width={BAR_W} height={5} rx={2.5} fill="rgba(255,255,255,0.06)" />
+        {barSegs}
         <text x={x} y={y + 17} textAnchor="middle" fill={C.dim} fontSize={7.5}
           fontFamily="'JetBrains Mono',monospace">n={node.samples} G={node.impurity.toFixed(3)}</text>
       </g>
@@ -275,21 +305,27 @@ function stratifiedSample(rows, targetCol, n) {
   return result;
 }
 
-function processCSVData(rawRows, headers, targetCol, naStrategy, sampleMode) {
-  // Apply NA strategy
+// selectedCols: array of column names the user kept (includes target). null = use all headers.
+function processCSVData(rawRows, headers, targetCol, naStrategy, sampleMode, selectedCols) {
+  // Resolve active column set — always include target, apply user selection for features
+  const activeCols = selectedCols
+    ? [targetCol, ...selectedCols.filter(h => h !== targetCol)]
+    : headers;
+
+  // Apply NA strategy over the active columns only
   let rows;
   if (naStrategy === "drop") {
-    rows = rawRows.filter(r => headers.every(h => !NA_VALS.has(String(r[h] ?? "").trim())));
+    rows = rawRows.filter(r => activeCols.every(h => !NA_VALS.has(String(r[h] ?? "").trim())));
   } else {
-    // Fill non-target numeric columns with column median
+    // Fill non-target numeric active columns with column median
     const medians = {};
-    headers.filter(h => h !== targetCol).forEach(h => {
+    activeCols.filter(h => h !== targetCol).forEach(h => {
       const nums = rawRows.map(r => parseFloat(r[h])).filter(v => !isNaN(v)).sort((a, b) => a - b);
       if (nums.length) medians[h] = nums[Math.floor(nums.length / 2)];
     });
     rows = rawRows.map(r => {
       const copy = { ...r };
-      headers.forEach(h => {
+      activeCols.forEach(h => {
         if (h !== targetCol && NA_VALS.has(String(r[h] ?? "").trim())) {
           copy[h] = String(medians[h] ?? 0);
         }
@@ -304,12 +340,10 @@ function processCSVData(rawRows, headers, targetCol, naStrategy, sampleMode) {
   const totalRows = rows.length;
   if (sampleMode === "1000" && rows.length > 1000) {
     rows = stratifiedSample(rows, targetCol, 1000);
-  } else if (sampleMode === "2000" && rows.length > 2000) {
-    rows = stratifiedSample(rows, targetCol, 2000);
   }
   const sampledRows = rows.length;
 
-  const featCols = headers.filter(h => h !== targetCol);
+  const featCols = activeCols.filter(h => h !== targetCol);
 
   // Determine numeric vs categorical
   const isNum = {};
@@ -335,13 +369,11 @@ function processCSVData(rawRows, headers, targetCol, naStrategy, sampleMode) {
     }
   });
 
-  // Target binarisation: first sorted unique value → 0 (class A), rest → 1 (class B).
-  // Capture raw values before binarisation so we can build human-readable labels.
+  // Map raw target values → formatted class label strings.
+  // Sorted so the mapping is stable regardless of row order.
   const targetUniq = [...new Set(rows.map(r => String(r[targetCol] ?? "")))].sort();
-  const classLabels = {
-    A: formatClassLabel(targetUniq[0] ?? "A"),
-    B: targetUniq.length === 2 ? formatClassLabel(targetUniq[1]) : "Other",
-  };
+  const classLabels = targetUniq.map(v => formatClassLabel(v));
+  const targetMap   = Object.fromEntries(targetUniq.map((v, i) => [v, classLabels[i]]));
 
   const data = rows.map(r => {
     const obj = {};
@@ -354,7 +386,8 @@ function processCSVData(rawRows, headers, targetCol, naStrategy, sampleMode) {
         });
       }
     });
-    obj["target"] = String(r[targetCol] ?? "") === targetUniq[0] ? 0 : 1;
+    // Target is stored as the human-readable class label string
+    obj["target"] = targetMap[String(r[targetCol] ?? "")] ?? String(r[targetCol] ?? "");
     return obj;
   });
 
@@ -362,44 +395,62 @@ function processCSVData(rawRows, headers, targetCol, naStrategy, sampleMode) {
 }
 
 const SAMPLE_OPTIONS = [
-  { key: "all",  label: "Use all rows",          sub: "May be slow for large datasets" },
-  { key: "2000", label: "Random sample: 2,000",  sub: "Stratified by target class" },
-  { key: "1000", label: "Random sample: 1,000",  sub: "Stratified by target class" },
+  { key: "1000", label: "Random sample: 1,000 rows", sub: "Stratified by target class" },
+  { key: "all",  label: "Use all rows",              sub: "May be slow for large datasets" },
 ];
 
 // ─── CSV Modal ─────────────────────────────────────────────────────────────────
 function DataModal({ modal, onUpdate, onConfirm, onCancel }) {
-  const { fileName, rawRows, headers, naStats, selectedTarget, naStrategy, sampleMode, warning } = modal;
-  const isLarge = rawRows.length > 2000;
+  const { fileName, rawRows, headers, naStats, selectedTarget, naStrategy, sampleMode, selectedColumns, warning } = modal;
+  // selectedColumns: set of column names to include (all by default)
+  const includedCols = selectedColumns ?? headers;
+  const isLarge = rawRows.length > 1000;
+
   const inp = {
-    padding: "5px 8px", borderRadius: 5, background: "#1a1f2e",
-    border: `1px solid ${C.border}`, color: C.text, fontSize: 11,
+    padding: "5px 8px", borderRadius: 8, background: "#161c2a",
+    border: "none", color: C.text, fontSize: 11,
     fontFamily: "'JetBrains Mono',monospace", outline: "none",
+    boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.08)",
+  };
+
+  const toggleCol = (h) => {
+    if (h === selectedTarget) return; // target is always included
+    const next = includedCols.includes(h)
+      ? includedCols.filter(c => c !== h)
+      : [...includedCols, h];
+    // Always ensure target stays in the list
+    if (!next.includes(selectedTarget)) next.push(selectedTarget);
+    onUpdate({ selectedColumns: next });
   };
 
   const handleConfirm = () => {
-    const result = processCSVData(rawRows, headers, selectedTarget, naStrategy, sampleMode ?? "all");
+    const result = processCSVData(rawRows, headers, selectedTarget, naStrategy, sampleMode ?? "1000", includedCols);
     if (!result) return;
     onConfirm(result.data, result.features, result.targetCol,
               fileName.replace(".csv", ""), result.totalRows, result.sampledRows, result.classLabels);
   };
 
+  const featureCols = headers.filter(h => h !== selectedTarget);
+  const checkedCount = featureCols.filter(h => includedCols.includes(h)).length;
+
   return (
     <div style={{
       position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 100,
       display: "flex", alignItems: "center", justifyContent: "center",
+      backdropFilter: "blur(4px)",
     }}>
       <div style={{
-        background: C.panel, border: `1px solid ${C.border}`, borderRadius: 12,
+        background: C.panel, borderRadius: 16,
+        boxShadow: "0 24px 64px rgba(0,0,0,0.7), inset 0 0 0 1px rgba(255,255,255,0.07)",
         padding: 24, maxWidth: 480, width: "90vw", fontFamily: "'JetBrains Mono',monospace",
-        color: C.text, maxHeight: "85vh", overflowY: "auto",
+        color: C.text, maxHeight: "88vh", overflowY: "auto",
       }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: C.accent, marginBottom: 14 }}>
-          Configure Dataset
+          Configure dataset
         </div>
 
         {/* File summary */}
-        <div style={{ fontSize: 10, color: C.dim, marginBottom: 12, lineHeight: 1.8 }}>
+        <div style={{ fontSize: 10, color: C.dim, marginBottom: 16, lineHeight: 1.8 }}>
           <div>📄 <strong style={{ color: C.text }}>{fileName}</strong></div>
           <div>{rawRows.length.toLocaleString()} rows · {headers.length} columns</div>
           {naStats.total > 0 && (
@@ -409,11 +460,13 @@ function DataModal({ modal, onUpdate, onConfirm, onCancel }) {
         </div>
 
         {/* Target column */}
-        <div style={{ marginBottom: 14 }}>
-          <label style={{ fontSize: 9, color: C.dim, textTransform: "uppercase", letterSpacing: 1, display: "block", marginBottom: 4 }}>
-            Target column (class to predict)
+        <div style={{ marginBottom: 16 }}>
+          <label style={{ fontSize: 9, color: C.dim, fontWeight: 400, display: "block", marginBottom: 5 }}>
+            Target column
           </label>
-          <select value={selectedTarget} onChange={e => onUpdate({ selectedTarget: e.target.value })} style={{ ...inp, width: "100%", cursor: "pointer" }}>
+          <select value={selectedTarget}
+            onChange={e => onUpdate({ selectedTarget: e.target.value, selectedColumns: headers })}
+            style={{ ...inp, width: "100%", cursor: "pointer" }}>
             {headers.map(h => <option key={h} value={h}>{h}</option>)}
           </select>
           <div style={{ fontSize: 9, color: C.dimmer, marginTop: 3 }}>
@@ -421,20 +474,77 @@ function DataModal({ modal, onUpdate, onConfirm, onCancel }) {
           </div>
         </div>
 
+        {/* Feature column selection */}
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 7 }}>
+            <label style={{ fontSize: 9, color: C.dim, fontWeight: 400 }}>
+              Select features to include
+            </label>
+            <span style={{ fontSize: 8.5, color: C.dimmer }}>
+              {checkedCount}/{featureCols.length} selected
+            </span>
+          </div>
+          <div style={{
+            maxHeight: 168, overflowY: "auto", display: "flex", flexDirection: "column", gap: 1,
+            background: "#0c1018", borderRadius: 10,
+            boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.06)",
+            padding: "4px 0",
+            scrollbarWidth: "thin", scrollbarColor: `${C.border} transparent`,
+          }}>
+            {/* Target row — always checked, disabled */}
+            <label style={{
+              display: "flex", alignItems: "center", gap: 8,
+              padding: "5px 12px", cursor: "default", opacity: 0.45,
+            }}>
+              <input type="checkbox" checked readOnly
+                style={{ accentColor: C.accent, cursor: "default", flexShrink: 0 }} />
+              <span style={{ fontSize: 10, color: C.dim, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {selectedTarget}
+              </span>
+              <span style={{ fontSize: 8, color: C.dimmer, flexShrink: 0 }}>target</span>
+            </label>
+            {featureCols.map(h => {
+              const checked = includedCols.includes(h);
+              return (
+                <label key={h} style={{
+                  display: "flex", alignItems: "center", gap: 8,
+                  padding: "5px 12px", cursor: "pointer",
+                  transition: "background 0.12s",
+                }}
+                onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.03)"; }}
+                onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
+                >
+                  <input type="checkbox" checked={checked} onChange={() => toggleCol(h)}
+                    style={{ accentColor: C.accent, cursor: "pointer", flexShrink: 0 }} />
+                  <span style={{
+                    fontSize: 10, color: checked ? C.text : C.dim,
+                    flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                    transition: "color 0.12s",
+                  }}>
+                    {h}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+
         {/* NA strategy */}
         {naStats.total > 0 && (
-          <div style={{ marginBottom: 14 }}>
-            <label style={{ fontSize: 9, color: C.dim, textTransform: "uppercase", letterSpacing: 1, display: "block", marginBottom: 6 }}>
+          <div style={{ marginBottom: 16 }}>
+            <label style={{ fontSize: 9, color: C.dim, fontWeight: 400, display: "block", marginBottom: 6 }}>
               Handle missing values
             </label>
             <div style={{ display: "flex", gap: 8 }}>
               {["drop", "median"].map(s => (
                 <button key={s} onClick={() => onUpdate({ naStrategy: s })} style={{
-                  flex: 1, padding: "6px 10px", borderRadius: 6, fontSize: 10, cursor: "pointer",
-                  fontFamily: "inherit", fontWeight: naStrategy === s ? 700 : 400,
-                  background: naStrategy === s ? C.accentG : "#1a1f2e",
-                  border: `1px solid ${naStrategy === s ? C.accent : C.border}`,
+                  flex: 1, padding: "6px 10px", borderRadius: 9, fontSize: 10, cursor: "pointer",
+                  fontFamily: "inherit", fontWeight: naStrategy === s ? 600 : 400,
+                  background: naStrategy === s ? `${C.accent}22` : "rgba(255,255,255,0.04)",
+                  border: "none",
+                  boxShadow: naStrategy === s ? `inset 0 0 0 1px ${C.accent}66` : "inset 0 0 0 1px rgba(255,255,255,0.08)",
                   color: naStrategy === s ? C.accent : C.dim,
+                  transition: "all 0.15s ease-out",
                 }}>
                   {s === "drop" ? "Drop rows with NA" : "Fill with median"}
                 </button>
@@ -443,34 +553,28 @@ function DataModal({ modal, onUpdate, onConfirm, onCancel }) {
           </div>
         )}
 
-        {/* Sampling — only shown for large datasets */}
+        {/* Sampling — only shown for datasets over 1,000 rows */}
         {isLarge && (
-          <div style={{ marginBottom: 14 }}>
-            <div style={{
-              padding: "8px 11px", borderRadius: 6, background: `${C.orange}12`,
-              border: `1px solid ${C.orange}44`, fontSize: 10, color: C.orange,
-              marginBottom: 10, lineHeight: 1.6,
-            }}>
-              Large dataset detected ({rawRows.length.toLocaleString()} rows). For smooth
-              visualization, we recommend sampling.
-            </div>
-            <label style={{ fontSize: 9, color: C.dim, textTransform: "uppercase", letterSpacing: 1, display: "block", marginBottom: 6 }}>
+          <div style={{ marginBottom: 16 }}>
+            <label style={{ fontSize: 9, color: C.dim, fontWeight: 400, display: "block", marginBottom: 6 }}>
               Sampling
             </label>
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               {SAMPLE_OPTIONS.map(opt => {
-                const active = (sampleMode ?? "2000") === opt.key;
+                const active = (sampleMode ?? "1000") === opt.key;
                 return (
                   <button key={opt.key} onClick={() => onUpdate({ sampleMode: opt.key })} style={{
-                    padding: "7px 11px", borderRadius: 6, fontSize: 10, cursor: "pointer",
+                    padding: "8px 12px", borderRadius: 9, fontSize: 10, cursor: "pointer",
                     fontFamily: "inherit", textAlign: "left", display: "flex", justifyContent: "space-between", alignItems: "center",
-                    background: active ? C.accentG : "#1a1f2e",
-                    border: `1px solid ${active ? C.accent : C.border}`,
+                    background: active ? `${C.accent}22` : "rgba(255,255,255,0.04)",
+                    border: "none",
+                    boxShadow: active ? `inset 0 0 0 1px ${C.accent}66` : "inset 0 0 0 1px rgba(255,255,255,0.08)",
                     color: active ? C.accent : C.dim,
-                    fontWeight: active ? 700 : 400,
+                    fontWeight: active ? 600 : 400,
+                    transition: "all 0.15s ease-out",
                   }}>
                     <span>{opt.label}</span>
-                    <span style={{ fontSize: 8, opacity: 0.7 }}>{opt.sub}</span>
+                    <span style={{ fontSize: 8, opacity: 0.6 }}>{opt.sub}</span>
                   </button>
                 );
               })}
@@ -485,15 +589,23 @@ function DataModal({ modal, onUpdate, onConfirm, onCancel }) {
 
         {/* Actions */}
         <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={onCancel} style={{
-            flex: 1, padding: "8px", borderRadius: 6, border: `1px solid ${C.border}`,
-            background: "#1a1f2e", color: C.dim, fontSize: 11, fontFamily: "inherit", cursor: "pointer",
-          }}>Cancel</button>
+          <button onClick={onCancel}
+            onMouseEnter={e => { e.currentTarget.style.color = C.text; e.currentTarget.style.background = "rgba(255,255,255,0.06)"; }}
+            onMouseLeave={e => { e.currentTarget.style.color = C.dim; e.currentTarget.style.background = "none"; }}
+            style={{
+              flex: 1, padding: "9px", borderRadius: 10, border: "none",
+              background: "none", color: C.dim, fontSize: 11, fontFamily: "inherit", cursor: "pointer",
+              transition: "color 0.15s ease-out, background 0.15s ease-out",
+            }}>Cancel</button>
           <button onClick={handleConfirm} style={{
-            flex: 2, padding: "8px", borderRadius: 6, border: "none",
-            background: `linear-gradient(135deg,${C.accent},${C.green})`,
+            flex: 2, padding: "9px", borderRadius: 10, border: "none",
+            background: `linear-gradient(135deg,${C.accent},#d97706)`,
             color: "#000", fontSize: 11, fontFamily: "inherit", cursor: "pointer", fontWeight: 700,
-          }}>Confirm & Build Forest</button>
+            transition: "transform 0.15s ease-out",
+          }}
+          onMouseEnter={e => { e.currentTarget.style.transform = "scale(1.02)"; }}
+          onMouseLeave={e => { e.currentTarget.style.transform = "scale(1)"; }}
+          >Confirm &amp; Build</button>
         </div>
       </div>
     </div>
@@ -509,7 +621,6 @@ export default function RandomForestViz({ mode = "random-forest" }) {
   const [customDataset, setCustomDataset] = useState(null);
   const [csvModal, setCsvModal]           = useState(null);
   const [dragOver, setDragOver]           = useState(false);
-  const [badgeHovered, setBadgeHovered]   = useState(false);
 
   const activeData      = customDataset?.data        ?? heartData;
   const activeFeatures  = customDataset?.features    ?? heartMeta.features;
@@ -526,6 +637,9 @@ export default function RandomForestViz({ mode = "random-forest" }) {
       })()
     : heartMeta.description;
   const datasetTooltip = customDataset ? null : heartMeta.tooltip;
+  const datasetLine = customDataset
+    ? `Using: ${customDataset.name} · ${activeData.length.toLocaleString()} samples · ${activeFeatures.length} features · ${classLabels.length === 2 ? "binary" : classLabels.length + "-class"} classification`
+    : `Using: Heart Disease Dataset · ${heartData.length} samples · ${heartMeta.features.length} features · binary classification`;
 
   // ── Hyperparameter state ───────────────────────────────────────────────────
   const [maxDepth, setMaxDepth]         = useState(3);
@@ -566,6 +680,10 @@ export default function RandomForestViz({ mode = "random-forest" }) {
       @keyframes nodeIn {
         from { opacity: 0; transform: scale(0.94); }
         to   { opacity: 1; transform: scale(1); }
+      }
+      @keyframes taxFadeIn {
+        from { opacity: 0; }
+        to   { opacity: 1; }
       }
     `;
     document.head.appendChild(s);
@@ -619,11 +737,12 @@ export default function RandomForestViz({ mode = "random-forest" }) {
       if (rawRows.length) {
         const headers = meta.fields;
         const naStats = detectNAs(rawRows, headers);
-        const isLarge = rawRows.length > 2000;
+        const isLarge = rawRows.length > 1000;
         const modal = {
           fileName: pending.name, rawRows, headers, naStats,
           selectedTarget: headers[headers.length - 1],
-          naStrategy: "drop", sampleMode: isLarge ? "2000" : "all",
+          naStrategy: "drop", sampleMode: isLarge ? "1000" : "all",
+          selectedColumns: headers,
         };
         setTimeout(() => setCsvModal(modal), 0);
         return;
@@ -777,12 +896,13 @@ export default function RandomForestViz({ mode = "random-forest" }) {
       if (!rawRows.length) return;
       const headers    = meta.fields;
       const naStats    = detectNAs(rawRows, headers);
-      const isLarge    = rawRows.length > 2000;
-      const sampleMode = isLarge ? "2000" : "all";
+      const isLarge    = rawRows.length > 1000;
+      const sampleMode = isLarge ? "1000" : "all";
       setCsvModal({
         fileName: file.name, rawRows, headers, naStats,
         selectedTarget: headers[headers.length - 1],
         naStrategy: "drop", sampleMode,
+        selectedColumns: headers,
       });
     };
     reader.readAsText(file);
@@ -822,9 +942,11 @@ export default function RandomForestViz({ mode = "random-forest" }) {
     return done ? { idx: i, prediction: getTreePrediction(t) } : null;
   }).filter(Boolean);
 
-  const votesA = completedTrees.filter(t => t.prediction === "A").length;
-  const votesB = completedTrees.filter(t => t.prediction === "B").length;
-  const ensemblePrediction = votesA >= votesB ? "A" : "B";
+  const votesPerClass = {};
+  completedTrees.forEach(t => {
+    votesPerClass[t.prediction] = (votesPerClass[t.prediction] ?? 0) + 1;
+  });
+  const ensemblePrediction = Object.entries(votesPerClass).sort((a, b) => b[1] - a[1])[0]?.[0] ?? classLabels[0];
   const hasEnsemble = completedTrees.length >= 2;
 
   const curBootstrap  = bootstrapInfo[curTree];
@@ -883,58 +1005,41 @@ export default function RandomForestViz({ mode = "random-forest" }) {
             <HintTooltip />
           </span>
         }
-        center={
-          <span
-            style={{ position: "relative", display: "inline-block" }}
-            onMouseEnter={() => setBadgeHovered(true)}
-            onMouseLeave={() => setBadgeHovered(false)}
-          >
+        detail={
+          <div style={{ display: "flex", alignItems: "center", gap: 12, width: "100%" }}>
             <span style={{
-              fontSize: 9, color: C.dim, background: "rgba(255,255,255,0.05)",
-              borderRadius: 6, padding: "2px 8px",
-              cursor: datasetTooltip ? "help" : "default",
-              userSelect: "none",
-              boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.08)",
+              fontSize: 10,
+              color: "#94a3b8",
+              fontFamily: "'JetBrains Mono',monospace",
+              flex: 1,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
             }}>
-              {datasetLabel}{datasetTooltip ? " ⓘ" : ""}
+              {datasetLine}
             </span>
-            {datasetTooltip && badgeHovered && (
-              <div style={{
-                position: "absolute", top: "calc(100% + 8px)", left: "50%",
-                transform: "translateX(-50%)", zIndex: 20,
-                background: "#141b2d",
-                borderRadius: 10, padding: "11px 14px", width: 300,
-                fontSize: 10, color: C.text, lineHeight: 1.6,
-                boxShadow: `0 8px 32px rgba(0,0,0,0.6), inset 0 0 0 1px rgba(255,255,255,0.08)`,
-                pointerEvents: "none",
-              }}>
-                {datasetTooltip}
-              </div>
-            )}
-          </span>
-        }
-        right={
-          <>
-            {customDataset && (
-              <button
-                onClick={() => { setCustomDataset(null); buildForestWithData(heartData, heartMeta.features, heartMeta.targetCol); }}
-                style={{ ...inp, fontSize: 10, padding: "4px 11px", cursor: "pointer", boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.08)" }}
-              >
-                ↩ Heart Disease
-              </button>
-            )}
             <label style={{
-              padding: "4px 11px", borderRadius: 8,
-              background: "rgba(255,255,255,0.05)", color: C.dim, fontSize: 10,
-              cursor: "pointer", fontFamily: "inherit", display: "inline-block",
-              boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.08)",
-              transition: "color 0.15s ease-out, background 0.15s ease-out",
-            }}>
-              ↑ Upload CSV
+              fontSize: 10, color: C.dim, cursor: "pointer",
+              fontFamily: "'JetBrains Mono',monospace",
+              flexShrink: 0,
+              transition: "color 0.15s",
+            }}
+              onMouseEnter={e => e.currentTarget.style.color = C.accent}
+              onMouseLeave={e => e.currentTarget.style.color = C.dim}
+            >
+              Change dataset
               <input type="file" accept=".csv" style={{ display: "none" }}
                 onChange={e => { openFile(e.target.files[0]); e.target.value = ""; }} />
             </label>
-          </>
+            {customDataset && (
+              <button
+                onClick={() => { setCustomDataset(null); buildForestWithData(heartData, heartMeta.features, heartMeta.targetCol); }}
+                style={{ ...inp, fontSize: 10, padding: "2px 9px", cursor: "pointer", boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.08)", flexShrink: 0 }}
+              >
+                ↩ Reset
+              </button>
+            )}
+          </div>
         }
       />
 
@@ -1159,7 +1264,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
           {allNodes.map(node => {
             const show  = visibleSet.has(node.id);
             const phase = ts.nodeId === node.id ? ts.phase : show ? 2 : 0;
-            return <TreeNode key={node.id} node={node} show={show || ts.nodeId === node.id} phase={phase} pos={positions[node.id]} labelA={classLabels.A} labelB={classLabels.B} />;
+            return <TreeNode key={node.id} node={node} show={show || ts.nodeId === node.id} phase={phase} pos={positions[node.id]} allClasses={classLabels} />;
           })}
         </svg>
 
@@ -1220,7 +1325,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
             <span style={{ fontSize: 8.5, color: C.dimmer }}>
               <span style={{ color: C.dimmer }}>● not sampled</span>{"  "}
               <span style={{ color: `${C.accent}99` }}>● candidate</span>{"  "}
-              <span style={{ color: C.accent }}>● chosen</span>
+              <span style={{ color: C.green }}>● chosen</span>
             </span>
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 5, justifyContent: "center" }}>
@@ -1233,7 +1338,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
             const showGini    = ts.phase >= 1 && cn && ev;
             let bg, col, shd = "none";
             if (ts.phase >= 2 && isBest) {
-              bg = `${C.accent}28`; col = C.accent; shd = `0 0 14px ${C.accent}22`;
+              bg = `${C.green}22`; col = C.green; shd = `0 0 14px ${C.green}22`;
             } else if (ts.phase >= 1 && isCand) {
               bg = `${C.accent}12`; col = `${C.accent}bb`;
             } else if (ts.phase >= 2 && isGlobalBest) {
@@ -1265,46 +1370,216 @@ export default function RandomForestViz({ mode = "random-forest" }) {
       <div style={{ padding: "6px 16px 10px" }}>
         <div style={{ fontSize: 9, color: C.dim, fontWeight: 400, marginBottom: 6 }}>Calculations</div>
         <div style={{
-          padding: "14px 16px", background: "#0c1018", borderRadius: 12,
+          background: "#0c1018", borderRadius: 12,
           boxShadow: "0 2px 16px rgba(0,0,0,0.35), inset 0 0 0 1px rgba(255,255,255,0.04)",
-          fontSize: 10.5, lineHeight: 1.7,
+          overflow: "hidden",
         }}>
-          {!currentNode && <span style={{ color: C.dim }}>Press ▶ Grow or → arrow key to begin…</span>}
-          {currentNode?.type === "leaf" && (
-            <span>🍃 <strong style={{ color: currentNode.prediction === "A" ? C.blue : C.leafB }}>Leaf</strong> — Predict: <strong>{currentNode.prediction === "A" ? classLabels.A : classLabels.B}</strong> | Gini={currentNode.impurity.toFixed(4)} | n={currentNode.samples} [{currentNode.classA} {classLabels.A}, {currentNode.classB} {classLabels.B}]</span>
+
+          {/* Empty state */}
+          {!currentNode && (
+            <div style={{ padding: "18px 16px", color: C.dimmer, fontSize: 10.5 }}>
+              Press <span style={{ color: C.dim }}>▶ Grow</span> or use <span style={{ color: C.dim }}>→</span> to begin…
+            </div>
           )}
-          {currentNode?.type === "split" && (<>
-            <div style={{ color: C.accent, fontWeight: 700, marginBottom: 5, fontSize: 11 }}>▸ Node depth={currentNode.depth}, n={currentNode.samples}</div>
-            {ts.phase === 0 && (
-              <div style={{ color: C.orange, opacity: 0.75 }}>Sampling feature candidates…</div>
-            )}
-            {ts.phase >= 1 && (
-              <div><span style={{ color: C.orange }}>① Random subset ({currentNode.candidateIndices.length}/{activeFeatures.length}):</span> [{currentNode.candidateIndices.map(i => activeFeatures[i]).join(", ")}]</div>
-            )}
-            {ts.phase >= 1 && (
-              <div style={{ marginTop: 3 }}>
-                <span style={{ color: C.orange }}>② Gini per candidate:</span>
-                <div style={{ marginLeft: 14, marginTop: 2 }}>
-                  {currentNode.allFeatureEvals
-                    .filter(ev => currentNode.candidateIndices.includes(ev.featureIndex))
-                    .map((ev, j) => (
-                      <div key={j} style={{ color: ts.phase >= 2 && ev.featureIndex === currentNode.featureIndex ? C.green : C.dim }}>
-                        {activeFeatures[ev.featureIndex]}: t={ev.threshold} G={ev.gini.toFixed(4)}
-                        {ts.phase >= 2 && ev.featureIndex === currentNode.featureIndex && " ◀ best in subset"}
-                      </div>
-                    ))}
+
+          {/* ── Leaf node ──────────────────────────────────────────────────────── */}
+          {currentNode?.type === "leaf" && (() => {
+            const predColor = classColor(currentNode.prediction, classLabels);
+            const sortedCounts = Object.entries(currentNode.classCounts ?? {})
+              .sort((a, b) => b[1] - a[1]);
+            const total = currentNode.samples;
+            let xCursor = 0;
+            const barSegs = classLabels.map(cls => {
+              const cnt = currentNode.classCounts?.[cls] ?? 0;
+              const pct = total > 0 ? (cnt / total) * 100 : 0;
+              const seg = { cls, cnt, pct, color: classColor(cls, classLabels), x: xCursor };
+              xCursor += pct;
+              return seg;
+            }).filter(s => s.pct > 0);
+            return (
+              <div style={{ padding: "16px 16px" }}>
+                {/* Predicted class */}
+                <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 12 }}>
+                  <span style={{ fontSize: 9, color: C.dim }}>Leaf node · Prediction</span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+                  <div style={{
+                    fontSize: 15, fontWeight: 700, color: predColor,
+                    fontFamily: "'JetBrains Mono',monospace",
+                  }}>{currentNode.prediction}</div>
+                  <div style={{ fontSize: 9, color: C.dim }}>
+                    Gini <span style={{ color: C.text, fontFamily: "'JetBrains Mono',monospace" }}>{currentNode.impurity.toFixed(4)}</span>
+                    <span style={{ marginLeft: 8 }}>n = <span style={{ color: C.text, fontFamily: "'JetBrains Mono',monospace" }}>{currentNode.samples}</span></span>
+                  </div>
+                </div>
+
+                {/* Stacked distribution bar */}
+                <div style={{ height: 8, borderRadius: 4, overflow: "hidden", background: "rgba(255,255,255,0.05)", marginBottom: 8, display: "flex" }}>
+                  {barSegs.map(s => (
+                    <div key={s.cls} style={{ width: `${s.pct}%`, background: s.color, transition: "width .3s" }} />
+                  ))}
+                </div>
+
+                {/* Class count legend */}
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px" }}>
+                  {sortedCounts.map(([cls, cnt]) => (
+                    <div key={cls} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 9 }}>
+                      <div style={{ width: 7, height: 7, borderRadius: 2, background: classColor(cls, classLabels), flexShrink: 0 }} />
+                      <span style={{ color: C.dim }}>{cls}</span>
+                      <span style={{ color: C.text, fontFamily: "'JetBrains Mono',monospace" }}>{cnt}</span>
+                    </div>
+                  ))}
                 </div>
               </div>
-            )}
-            {ts.phase >= 2 && currentNode.globalBestIdx !== currentNode.featureIndex && (
-              <div style={{ marginTop: 3, color: C.red, fontSize: 10 }}>
-                ⚠ Global best was <strong>{activeFeatures[currentNode.globalBestIdx]}</strong> (G={currentNode.globalBestGini.toFixed(4)}) but it wasn't in the random subset
+            );
+          })()}
+
+          {/* ── Split node ─────────────────────────────────────────────────────── */}
+          {currentNode?.type === "split" && (() => {
+            const candidateEvals = (currentNode.allFeatureEvals ?? [])
+              .filter(ev => currentNode.candidateIndices.includes(ev.featureIndex))
+              .sort((a, b) => a.gini - b.gini); // sorted best-first for bar chart
+
+            // Gini range for bar normalisation — use the worst gini as max bar width
+            const maxGini = Math.max(...candidateEvals.map(e => e.gini), 0.001);
+
+            return (<>
+              {/* ① Node header — always visible */}
+              <div style={{ padding: "14px 16px 12px" }}>
+                <div style={{ fontSize: 10, color: C.text, fontWeight: 600, marginBottom: 2 }}>
+                  Depth {currentNode.depth} · {currentNode.samples} samples
+                </div>
+                {ts.phase === 0 && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
+                    <div style={{
+                      display: "flex", gap: 3, alignItems: "center",
+                    }}>
+                      {[0,1,2].map(i => (
+                        <div key={i} style={{
+                          width: 5, height: 5, borderRadius: "50%",
+                          background: C.accent, opacity: 0.3 + i * 0.3,
+                          animation: `growPulse ${1 + i * 0.2}s ease-in-out infinite`,
+                        }} />
+                      ))}
+                    </div>
+                    <span style={{ fontSize: 9.5, color: C.dim }}>
+                      Sampling {currentNode.candidateIndices?.length ?? "?"} of {activeFeatures.length} features…
+                    </span>
+                  </div>
+                )}
+                {ts.phase >= 1 && (
+                  <div style={{ marginTop: 4, fontSize: 9, color: C.dim, lineHeight: 1.6 }}>
+                    Evaluating{" "}
+                    <span style={{ color: `${C.accent}cc` }}>
+                      {currentNode.candidateIndices.map(i => activeFeatures[i]).join(", ")}
+                    </span>
+                  </div>
+                )}
               </div>
-            )}
-            {ts.phase >= 2 && (
-              <div style={{ marginTop: 3 }}><span style={{ color: C.green }}>③ Split:</span> <strong>{currentNode.featureName}</strong> ≤ {currentNode.threshold} (G={currentNode.gini.toFixed(4)})</div>
-            )}
-          </>)}
+
+              {/* ② Gini bar chart — phase 1+ */}
+              {ts.phase >= 1 && (
+                <div style={{
+                  borderTop: "1px solid rgba(255,255,255,0.05)",
+                  padding: "12px 16px",
+                }}>
+                  <div style={{ fontSize: 9, color: C.dim, marginBottom: 8 }}>Gini per candidate <span style={{ color: C.dimmer }}>(shorter = better)</span></div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                    {candidateEvals.map((ev, j) => {
+                      const isChosen = ts.phase >= 2 && ev.featureIndex === currentNode.featureIndex;
+                      const barPct = maxGini > 0 ? (ev.gini / maxGini) * 100 : 50;
+                      const rowColor = isChosen ? C.green : C.dim;
+                      return (
+                        <div key={ev.featureIndex} style={{
+                          display: "flex", alignItems: "center", gap: 8,
+                          opacity: 0,
+                          animation: `taxFadeIn 0.25s ease ${j * 0.06}s forwards`,
+                        }}>
+                          {/* Feature name */}
+                          <div style={{
+                            width: 110, fontSize: 9, color: rowColor, fontWeight: isChosen ? 600 : 400,
+                            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                            flexShrink: 0, transition: "color .2s",
+                          }}>
+                            {activeFeatures[ev.featureIndex]}
+                          </div>
+                          {/* Bar */}
+                          <div style={{ flex: 1, height: 5, background: "rgba(255,255,255,0.05)", borderRadius: 3, overflow: "hidden" }}>
+                            <div style={{
+                              height: "100%",
+                              width: `${barPct}%`,
+                              background: isChosen ? C.green : `${C.accent}88`,
+                              borderRadius: 3,
+                              transition: "width 0.4s ease-out, background 0.2s",
+                            }} />
+                          </div>
+                          {/* Gini value */}
+                          <div style={{
+                            fontSize: 9, color: rowColor, fontFamily: "'JetBrains Mono',monospace",
+                            flexShrink: 0, width: 46, textAlign: "right",
+                            transition: "color .2s",
+                          }}>
+                            {ev.gini.toFixed(4)}
+                            {isChosen && <span style={{ marginLeft: 4, fontSize: 8 }}>✓</span>}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* ③ Global-best warning — phase 2 only, when subset missed the true best */}
+              {ts.phase >= 2 && currentNode.globalBestIdx !== currentNode.featureIndex && (
+                <div style={{
+                  borderTop: "1px solid rgba(255,255,255,0.05)",
+                  margin: "0 16px",
+                  padding: "10px 12px",
+                  borderRadius: 8,
+                  background: `${C.accent}0a`,
+                  borderLeft: `3px solid ${C.accent}88`,
+                  marginBottom: 10,
+                  fontSize: 9, color: C.dim, lineHeight: 1.65,
+                }}>
+                  <span style={{ color: `${C.accent}cc`, fontWeight: 600 }}>Subset missed global best</span>
+                  <br />
+                  <span style={{ fontFamily: "'JetBrains Mono',monospace", color: C.text }}>
+                    {activeFeatures[currentNode.globalBestIdx]}
+                  </span>{" "}
+                  had G={currentNode.globalBestGini.toFixed(4)} but wasn't sampled into the subset
+                </div>
+              )}
+
+              {/* ④ Split result card — phase 2 */}
+              {ts.phase >= 2 && (
+                <div style={{
+                  borderTop: "1px solid rgba(255,255,255,0.05)",
+                  padding: "12px 16px",
+                }}>
+                  <div style={{ fontSize: 9, color: C.dim, marginBottom: 6 }}>Split decision</div>
+                  <div style={{
+                    display: "flex", alignItems: "baseline", gap: 6,
+                    padding: "10px 12px", borderRadius: 8,
+                    background: `${C.green}0f`,
+                    borderLeft: `3px solid ${C.green}88`,
+                  }}>
+                    <span style={{
+                      fontSize: 12, fontWeight: 700, color: C.green,
+                      fontFamily: "'JetBrains Mono',monospace",
+                    }}>
+                      {currentNode.featureName}
+                    </span>
+                    <span style={{ fontSize: 11, color: C.dim, fontFamily: "'JetBrains Mono',monospace" }}>
+                      ≤ {currentNode.threshold}
+                    </span>
+                    <span style={{ fontSize: 9, color: C.dimmer, marginLeft: 4 }}>
+                      G={currentNode.gini.toFixed(4)}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </>);
+          })()}
         </div>
       </div>
 
@@ -1327,15 +1602,15 @@ export default function RandomForestViz({ mode = "random-forest" }) {
                     const ct = completedTrees.find(t => t.idx === i);
                     // Abbreviate label to fit the compact card (≤6 chars)
                     const abbrev = (label) => label.length <= 10 ? label : label.slice(0, 9) + "…";
-                    const cardLabel = ct ? abbrev(ct.prediction === "A" ? classLabels.A : classLabels.B) : "—";
-                    const cardColor = ct ? (ct.prediction === "A" ? C.blue : C.leafB) : C.dimmer;
+                    const cardLabel = ct ? abbrev(ct.prediction) : "—";
+                    const cardColor = ct ? classColor(ct.prediction, classLabels) : C.dimmer;
                     return (
                       <div key={i} style={{
                         minWidth: 44, height: 40, borderRadius: 9, display: "flex",
                         flexDirection: "column", alignItems: "center", justifyContent: "center",
                         padding: "0 7px",
-                        background: ct ? (ct.prediction === "A" ? `${C.blue}1a` : `${C.leafB}1a`) : "rgba(255,255,255,0.03)",
-                        boxShadow: ct ? `inset 0 0 0 1px ${ct.prediction === "A" ? `${C.blue}44` : `${C.leafB}44`}` : "inset 0 0 0 1px rgba(255,255,255,0.06)",
+                        background: ct ? `${cardColor}1a` : "rgba(255,255,255,0.03)",
+                        boxShadow: ct ? `inset 0 0 0 1px ${cardColor}44` : "inset 0 0 0 1px rgba(255,255,255,0.06)",
                         transition: "all .25s ease-out",
                       }}>
                         <div style={{ fontSize: 7, color: C.dim }}>T{i + 1}</div>
@@ -1346,23 +1621,37 @@ export default function RandomForestViz({ mode = "random-forest" }) {
                     );
                   })}
                   <div style={{ marginLeft: 8, fontSize: 10, color: C.dim }}>→</div>
-                  {hasEnsemble && (
-                    <div style={{
-                      padding: "7px 16px", borderRadius: 10,
-                      background: ensemblePrediction === "A"
-                        ? `${C.blue}18`
-                        : `${C.leafB}18`,
-                      boxShadow: `inset 0 0 0 1.5px ${ensemblePrediction === "A" ? `${C.blue}55` : `${C.leafB}55`}`,
-                    }}>
-                      <div style={{ fontSize: 8, color: C.dim, fontWeight: 400 }}>Prediction</div>
-                      <div style={{ fontSize: 16, fontWeight: 800, color: ensemblePrediction === "A" ? C.blue : C.leafB }}>
-                        {ensemblePrediction === "A" ? classLabels.A : classLabels.B}
+                  {hasEnsemble && (() => {
+                    const epColor = classColor(ensemblePrediction, classLabels);
+                    return (
+                      <div style={{
+                        padding: "7px 16px", borderRadius: 10,
+                        background: `${epColor}18`,
+                        boxShadow: `inset 0 0 0 1.5px ${epColor}55`,
+                      }}>
+                        <div style={{ fontSize: 8, color: C.dim, fontWeight: 400 }}>Prediction</div>
+                        <div style={{ fontSize: 16, fontWeight: 800, color: epColor }}>
+                          {ensemblePrediction}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    );
+                  })()}
                 </div>
-                <div style={{ display: "flex", gap: 16, fontSize: 10, color: C.dim }}>
-                  <span>Votes: <strong style={{ color: C.blue }}>{votesA}× {classLabels.A}</strong> vs <strong style={{ color: C.leafB }}>{votesB}× {classLabels.B}</strong></span>
+                <div style={{ display: "flex", gap: 12, fontSize: 10, color: C.dim, flexWrap: "wrap" }}>
+                  <span>
+                    Votes:{" "}
+                    {classLabels
+                      .filter(cls => (votesPerClass[cls] ?? 0) > 0)
+                      .map((cls, i, arr) => (
+                        <span key={cls}>
+                          <strong style={{ color: classColor(cls, classLabels) }}>
+                            {votesPerClass[cls]}× {cls}
+                          </strong>
+                          {i < arr.length - 1 && <span style={{ color: C.dimmer }}> · </span>}
+                        </span>
+                      ))
+                    }
+                  </span>
                   <span>Completed: {completedTrees.length}/{nEstimators}</span>
                   {bootstrapInfo.length > 0 && bootstrapInfo.some(b => b.oobAccuracy > 0) && (
                     <span style={{ color: C.dim }}>
@@ -1372,8 +1661,12 @@ export default function RandomForestViz({ mode = "random-forest" }) {
                 </div>
                 {hasEnsemble && (
                   <div style={{ marginTop: 8, display: "flex", height: 8, borderRadius: 4, overflow: "hidden", background: "#151a24" }}>
-                    <div style={{ width: `${(votesA / (votesA + votesB)) * 100}%`, background: C.blue, transition: "width .3s" }} />
-                    <div style={{ width: `${(votesB / (votesA + votesB)) * 100}%`, background: C.leafB, transition: "width .3s" }} />
+                    {classLabels.map(cls => {
+                      const pct = ((votesPerClass[cls] ?? 0) / completedTrees.length) * 100;
+                      return pct > 0
+                        ? <div key={cls} style={{ width: `${pct}%`, background: classColor(cls, classLabels), transition: "width .3s" }} />
+                        : null;
+                    })}
                   </div>
                 )}
               </div>

@@ -1,5 +1,5 @@
 // Real CART (Classification And Regression Trees) implementation.
-// Produces trees whose node shape exactly matches what RandomForestViz.jsx expects.
+// Fully general: supports any number of classes — binary is just the n=2 case.
 
 function shuffleArray(arr) {
   const a = [...arr];
@@ -10,52 +10,73 @@ function shuffleArray(arr) {
   return a;
 }
 
-function weightedGini(lA, lB, rA, rB) {
-  const nL = lA + lB, nR = rA + rB, n = nL + nR;
-  if (n === 0) return 0;
-  const gL = nL > 0 ? 1 - (lA / nL) ** 2 - (lB / nL) ** 2 : 0;
-  const gR = nR > 0 ? 1 - (rA / nR) ** 2 - (rB / nR) ** 2 : 0;
-  return (nL / n) * gL + (nR / n) * gR;
+// Count occurrences of each class value in data[targetCol].
+function countClasses(data, targetCol) {
+  const counts = {};
+  for (const row of data) {
+    const cls = row[targetCol];
+    counts[cls] = (counts[cls] ?? 0) + 1;
+  }
+  return counts;
 }
 
-// Evaluate one feature: find the best threshold by scanning all midpoints between
-// consecutive unique sorted values. Returns { featureIndex, gini, threshold }.
+// General Gini: 1 − Σpᵢ². Works for any number of classes.
+function giniFromCounts(counts, total) {
+  if (total === 0) return 0;
+  let sq = 0;
+  for (const c of Object.values(counts)) sq += (c / total) ** 2;
+  return 1 - sq;
+}
+
+// Weighted Gini after a split — same formula, just applied to each child.
+function weightedGini(leftCounts, nL, rightCounts, nR) {
+  const n = nL + nR;
+  if (n === 0) return 0;
+  return (nL / n) * giniFromCounts(leftCounts, nL)
+       + (nR / n) * giniFromCounts(rightCounts, nR);
+}
+
+// Evaluate one feature: find the threshold that minimises weighted Gini.
+// Returns { featureIndex, gini, threshold }.
 function evalFeatureOnData(data, featureIndex, features, targetCol) {
   const fname = features[featureIndex];
   const sorted = [...new Set(data.map(r => r[fname]))].sort((a, b) => a - b);
 
   if (sorted.length < 2) {
-    const nA = data.filter(r => r[targetCol] === 0).length;
-    const nB = data.length - nA;
-    const n  = data.length;
-    return { featureIndex, gini: n > 0 ? 1 - (nA / n) ** 2 - (nB / n) ** 2 : 0, threshold: sorted[0] ?? 0 };
+    const counts = countClasses(data, targetCol);
+    return { featureIndex, gini: giniFromCounts(counts, data.length), threshold: sorted[0] ?? 0 };
   }
 
   let bestGini = Infinity, bestThreshold = sorted[0];
   for (let k = 0; k < sorted.length - 1; k++) {
     const t = (sorted[k] + sorted[k + 1]) / 2;
-    let lA = 0, lB = 0, rA = 0, rB = 0;
+    const lCounts = {}, rCounts = {};
+    let nL = 0, nR = 0;
     for (const row of data) {
-      if (row[fname] <= t) { row[targetCol] === 0 ? lA++ : lB++; }
-      else                 { row[targetCol] === 0 ? rA++ : rB++; }
+      const cls = row[targetCol];
+      if (row[fname] <= t) { lCounts[cls] = (lCounts[cls] ?? 0) + 1; nL++; }
+      else                  { rCounts[cls] = (rCounts[cls] ?? 0) + 1; nR++; }
     }
-    const g = weightedGini(lA, lB, rA, rB);
+    const g = weightedGini(lCounts, nL, rCounts, nR);
     if (g < bestGini) { bestGini = g; bestThreshold = t; }
   }
   return { featureIndex, gini: bestGini, threshold: +bestThreshold.toFixed(4) };
 }
 
-// Recursive CART builder.
-// Output shape mirrors the fake buildTreeData so the visualizer works unchanged.
+// Recursive CART builder. Works for 2 or more classes.
+// Leaf shape: { type:"leaf", samples, classCounts, impurity, prediction, depth }
+//   prediction = the class label string with the highest count
 export function buildRealTree(data, features, targetCol, maxDepth, subsetSize, depth = 0) {
-  const n      = data.length;
-  const classA = data.filter(r => r[targetCol] === 0).length;
-  const classB = n - classA;
-  const impurity = n > 0 ? 1 - (classA / n) ** 2 - (classB / n) ** 2 : 0;
+  const n = data.length;
+  const classCounts = countClasses(data, targetCol);
+  const impurity = giniFromCounts(classCounts, n);
+  // Argmax: class with highest count
+  const prediction = Object.entries(classCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "?";
 
-  // Leaf conditions: max depth, too few samples, or pure node
-  if (depth >= maxDepth || n <= 5 || classA === 0 || classB === 0) {
-    return { type: "leaf", samples: n, classA, classB, impurity, prediction: classA >= classB ? "A" : "B", depth };
+  // Stop if max depth, too few samples, or node is already pure
+  const nDistinct = Object.values(classCounts).filter(c => c > 0).length;
+  if (depth >= maxDepth || n <= 5 || nDistinct <= 1) {
+    return { type: "leaf", samples: n, classCounts, impurity, prediction, depth };
   }
 
   // Evaluate ALL features (Gini + best threshold for each)
@@ -65,7 +86,7 @@ export function buildRealTree(data, features, targetCol, maxDepth, subsetSize, d
   // Random feature subset
   const candidateIndices = shuffleArray(allIdx).slice(0, subsetSize);
 
-  // Best split within subset
+  // Best split within the subset
   let bestFeature = candidateIndices[0], bestGini = Infinity, bestThreshold = 0;
   for (const fi of candidateIndices) {
     const ev = allFeatureEvals[fi];
@@ -78,22 +99,22 @@ export function buildRealTree(data, features, targetCol, maxDepth, subsetSize, d
     if (ev.gini < globalBestGini) { globalBestGini = ev.gini; globalBestIdx = ev.featureIndex; }
   }
 
-  const fname    = features[bestFeature];
-  const leftData = data.filter(r => r[fname] <= bestThreshold);
-  const rightData = data.filter(r => r[fname] > bestThreshold);
+  const fname     = features[bestFeature];
+  const leftData  = data.filter(r => r[fname] <= bestThreshold);
+  const rightData = data.filter(r => r[fname] >  bestThreshold);
 
   // Degenerate split — return leaf instead of infinite recursion
   if (leftData.length === 0 || rightData.length === 0) {
-    return { type: "leaf", samples: n, classA, classB, impurity, prediction: classA >= classB ? "A" : "B", depth };
+    return { type: "leaf", samples: n, classCounts, impurity, prediction, depth };
   }
 
   return {
     type: "split",
     featureIndex: bestFeature,
-    featureName: features[bestFeature],
-    threshold: bestThreshold,
-    gini: bestGini,
-    samples: n,
+    featureName:  features[bestFeature],
+    threshold:    bestThreshold,
+    gini:         bestGini,
+    samples:      n,
     candidateIndices,
     allFeatureEvals,
     globalBestIdx,
@@ -104,8 +125,7 @@ export function buildRealTree(data, features, targetCol, maxDepth, subsetSize, d
   };
 }
 
-// Sample n rows with replacement. Returns bootstrapData (array of row objects)
-// and oobIndices (original indices NOT drawn).
+// Sample n rows with replacement; return bootstrapData + oobIndices.
 export function bootstrapSample(data) {
   const n = data.length;
   const drawnSet = new Set();
@@ -120,7 +140,7 @@ export function bootstrapSample(data) {
   return { bootstrapData, oobIndices, inBag: drawnSet.size };
 }
 
-// Run a single row through the tree to get "A" or "B".
+// Traverse tree for a single row; returns the predicted class label string.
 export function predictRow(tree, row, features) {
   if (tree.type === "leaf") return tree.prediction;
   const fname = features[tree.featureIndex];
@@ -129,13 +149,13 @@ export function predictRow(tree, row, features) {
     : predictRow(tree.right, row, features);
 }
 
-// Compute OOB accuracy: run each OOB row through the tree, compare to true label.
+// OOB accuracy: compare predicted class label to actual class label in the data.
 export function computeOOBAccuracy(tree, data, oobIndices, features, targetCol) {
   if (oobIndices.length === 0) return null;
   let correct = 0;
   for (const idx of oobIndices) {
     const pred   = predictRow(tree, data[idx], features);
-    const actual = data[idx][targetCol] === 0 ? "A" : "B";
+    const actual = data[idx][targetCol]; // now a class label string
     if (pred === actual) correct++;
   }
   return +(correct / oobIndices.length).toFixed(3);

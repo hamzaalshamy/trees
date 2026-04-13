@@ -54,7 +54,7 @@ function processRow(r) {
   const slope   = SLOPE_MAP[r.slope];
   const ca      = r.ca === "" || r.ca === undefined ? NaN : +r.ca;
   const thal    = THAL_MAP[r.thal];
-  const target  = +r.num > 0 ? 1 : 0;
+  const target  = +r.num > 0 ? "Disease" : "No Disease";
 
   const vals = [age, sex, cp, trestbps, chol, fbs, restecg, thalch, exang, oldpeak, slope, ca, thal];
   if (vals.some(v => v === undefined || Number.isNaN(v))) return null;
@@ -87,7 +87,7 @@ export const heartMeta = {
   features: HEART_FEATURE_NAMES,
   featureDescriptions: HEART_FEATURE_DESCRIPTIONS,
   targetCol: "target",
-  targetLabels: { A: "No Disease", B: "Disease" },
+  targetLabels: ["No Disease", "Disease"],
   nSamples: processedRows.length,
   nFeatures: HEART_FEATURE_NAMES.length,
   description: `Heart Disease Dataset — ${processedRows.length} samples, ${HEART_FEATURE_NAMES.length} features, binary classification`,

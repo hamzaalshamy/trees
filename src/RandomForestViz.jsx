@@ -59,6 +59,16 @@ function getTreePrediction(node) {
   return Object.entries(totals).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "?";
 }
 
+// Format a split threshold for display on edges: 3 dp for small values, fewer for large.
+function fmtThresh(v) {
+  if (v == null) return "?";
+  const abs = Math.abs(v);
+  if (abs >= 1000) return v.toFixed(0);
+  if (abs >= 10)   return v.toFixed(1);
+  if (abs >= 1)    return v.toFixed(2);
+  return v.toFixed(3);
+}
+
 // Count actual leaf nodes so width scales with real tree shape, not worst-case depth.
 function countLeaves(node) {
   if (!node || node.type === "leaf") return 1;
@@ -162,17 +172,31 @@ function Edge({ p1, p2, visible, label, onPath, sampleActive }) {
   if (!visible || !p1 || !p2) return null;
   const highlighted = sampleActive && onPath;
   const dimmed      = sampleActive && !onPath;
+  // Line endpoints (clear of node circles/boxes)
+  const x1 = p1.x, y1 = p1.y + 27;
+  const x2 = p2.x, y2 = p2.y - 24;
+  // Place label 38% from the parent end — upper portion, clear of child node
+  const lx = x1 + (x2 - x1) * 0.38;
+  const ly = y1 + (y2 - y1) * 0.38;
+  const labelW = label.length * 5.6 + 10;
+  const textCol = highlighted ? PATH_COLOR : "#8aafc8";
   return (
     <g style={{ opacity: dimmed ? 0.15 : 1, transition: "opacity .3s" }}>
-      <line x1={p1.x} y1={p1.y + 27} x2={p2.x} y2={p2.y - 24}
+      <line x1={x1} y1={y1} x2={x2} y2={y2}
         stroke={highlighted ? PATH_COLOR : C.edge}
         strokeWidth={highlighted ? 2.4 : 1.4}
         strokeDasharray={highlighted ? undefined : "4 2"}
         style={{ transition: "stroke .25s, stroke-width .25s" }}
       />
-      <text x={(p1.x + p2.x) / 2} y={(p1.y + 27 + p2.y - 24) / 2 - 4}
-        textAnchor="middle" fill={highlighted ? PATH_COLOR : C.dim}
-        fontSize={8} fontFamily="'JetBrains Mono',monospace">{label}</text>
+      {/* Background pill so label is legible over the dashed line */}
+      <rect x={lx - labelW / 2} y={ly - 7} width={labelW} height={13}
+        rx={3} fill={C.bg} opacity={0.88} />
+      <text x={lx} y={ly + 2}
+        textAnchor="middle" dominantBaseline="middle"
+        fill={textCol} fontSize={9} fontFamily="'JetBrains Mono',monospace"
+        fontWeight={highlighted ? 700 : 400}>
+        {label}
+      </text>
     </g>
   );
 }
@@ -488,6 +512,7 @@ function DataModal({ modal, onUpdate, onConfirm, onCancel }) {
   const { fileName, rawRows, headers, naStats, selectedTarget, naStrategy, sampleMode, selectedColumns, warning, taskType = "classification" } = modal;
   const includedCols = selectedColumns ?? headers;
   const isLarge = rawRows.length > 1000;
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   const inp = {
     padding: "5px 8px", borderRadius: 8, background: "#161c2a",
@@ -539,6 +564,73 @@ function DataModal({ modal, onUpdate, onConfirm, onCancel }) {
             <div style={{ color: C.orange }}>⚠ {naStats.total} missing values found</div>
           )}
           {warning && <div style={{ color: C.red, marginTop: 4 }}>⚠ {warning}</div>}
+        </div>
+
+        {/* Data preview */}
+        <div style={{ marginBottom: 16 }}>
+          <button
+            onClick={() => setPreviewOpen(o => !o)}
+            style={{
+              background: "none", border: "none", cursor: "pointer", padding: 0,
+              fontSize: 9, color: previewOpen ? C.accent : C.dim,
+              fontFamily: "'JetBrains Mono',monospace",
+              display: "flex", alignItems: "center", gap: 4,
+              transition: "color 0.15s",
+            }}
+            onMouseEnter={e => { e.currentTarget.style.color = C.accent; }}
+            onMouseLeave={e => { e.currentTarget.style.color = previewOpen ? C.accent : C.dim; }}
+          >
+            <span style={{ fontSize: 8, display: "inline-block", transition: "transform 0.15s", transform: previewOpen ? "rotate(90deg)" : "rotate(0deg)" }}>▶</span>
+            Preview data (first 100 rows)
+          </button>
+          {previewOpen && (
+            <div style={{
+              marginTop: 8, overflowX: "auto", overflowY: "auto", maxHeight: 300,
+              borderRadius: 8,
+              boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.07)",
+              background: "#0c1018",
+              scrollbarWidth: "thin", scrollbarColor: `${C.border} transparent`,
+            }}>
+              <table style={{
+                borderCollapse: "collapse", fontSize: 9,
+                fontFamily: "'JetBrains Mono',monospace",
+                whiteSpace: "nowrap", width: "100%",
+              }}>
+                <thead>
+                  <tr>
+                    {headers.map(h => (
+                      <th key={h} style={{
+                        padding: "5px 8px", textAlign: "left", fontWeight: 600,
+                        color: h === selectedTarget ? C.accent : C.dim,
+                        borderBottom: `1px solid rgba(255,255,255,0.07)`,
+                        background: "#0c1018",
+                        position: "sticky", top: 0,
+                        maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis",
+                      }}>
+                        {h}{h === selectedTarget && <span style={{ marginLeft: 3, fontSize: 7.5, color: C.accent, opacity: 0.8 }}>▸target</span>}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rawRows.slice(0, 100).map((row, ri) => (
+                    <tr key={ri} style={{ background: ri % 2 === 1 ? "rgba(255,255,255,0.02)" : "transparent" }}>
+                      {headers.map(h => (
+                        <td key={h} style={{
+                          padding: "4px 8px", color: h === selectedTarget ? "#94a3b8" : C.dimmer,
+                          maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis",
+                          borderBottom: ri < 4 ? "1px solid rgba(255,255,255,0.03)" : "none",
+                          fontWeight: h === selectedTarget ? 500 : 400,
+                        }}>
+                          {String(row[h] ?? "—")}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
 
         {/* Task type */}
@@ -1590,9 +1682,11 @@ export default function RandomForestViz({ mode = "random-forest" }) {
             const edgeROnPath = samplePath.has(node.id) && samplePath.has(node.right?.id);
             return (
               <g key={node.id}>
-                <Edge p1={positions[node.id]} p2={positions[node.left?.id]}  visible={show} label="≤"
+                <Edge p1={positions[node.id]} p2={positions[node.left?.id]}  visible={show}
+                  label={`≤ ${fmtThresh(node.threshold)}`}
                   onPath={edgeLOnPath} sampleActive={samplePath.size > 0} />
-                <Edge p1={positions[node.id]} p2={positions[node.right?.id]} visible={show} label=">"
+                <Edge p1={positions[node.id]} p2={positions[node.right?.id]} visible={show}
+                  label={`> ${fmtThresh(node.threshold)}`}
                   onPath={edgeROnPath} sampleActive={samplePath.size > 0} />
               </g>
             );
@@ -1659,14 +1753,27 @@ export default function RandomForestViz({ mode = "random-forest" }) {
           boxShadow: "0 2px 16px rgba(0,0,0,0.35), inset 0 0 0 1px rgba(255,255,255,0.04)",
           padding: "14px 18px",
         }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 9, color: C.dim, fontWeight: 400 }}>Feature pool</span>
-            <span style={{ fontSize: 8.5, color: C.dimmer }}>
-              <span style={{ color: C.dimmer }}>● not sampled</span>{"  "}
-              <span style={{ color: `${C.accent}99` }}>● candidate</span>{"  "}
-              <span style={{ color: C.green }}>● chosen</span>
-            </span>
-          </div>
+          {(() => {
+            const showTrueBestWarning = ts.phase >= 2
+              && currentNode?.type === "split"
+              && currentNode?.globalBestIdx !== currentNode?.featureIndex;
+            return (
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 9, color: C.dim, fontWeight: 400 }}>Feature pool</span>
+                <span style={{ fontSize: 8.5, color: C.dimmer }}>
+                  <span style={{ color: C.dimmer }}>● not sampled</span>{"  "}
+                  <span style={{ color: `${C.accent}99` }}>● candidate</span>{"  "}
+                  <span style={{ color: C.green }}>● chosen</span>{"  "}
+                  <span style={{ color: C.leafB }}>● true best</span>
+                </span>
+                {showTrueBestWarning && (
+                  <span style={{ fontSize: 8, color: C.leafB, fontWeight: 600 }}>
+                    ⚠ true best excluded from subset
+                  </span>
+                )}
+              </div>
+            );
+          })()}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 5, justifyContent: "center" }}>
           {activeFeatures.map((f, i) => {
             const cn          = currentNode?.type === "split" ? currentNode : null;
@@ -1678,13 +1785,18 @@ export default function RandomForestViz({ mode = "random-forest" }) {
             let bg, col, shd = "none";
             if (ts.phase >= 2 && isBest) {
               bg = `${C.green}22`; col = C.green; shd = `0 0 14px ${C.green}22`;
+            } else if (ts.phase >= 2 && isGlobalBest) {
+              bg = `${C.leafB}15`; col = C.leafB;
+              shd = `0 0 0 1px ${C.leafB}55, 0 0 10px ${C.leafB}18`;
             } else if (ts.phase >= 1 && isCand) {
               bg = `${C.accent}12`; col = `${C.accent}bb`;
-            } else if (ts.phase >= 2 && isGlobalBest) {
-              bg = "rgba(255,255,255,0.03)"; col = C.dim;
             } else {
               bg = "rgba(255,255,255,0.03)"; col = C.dimmer;
             }
+            const giniCol = (ts.phase >= 2 && isBest)       ? C.green
+                          : (ts.phase >= 2 && isGlobalBest)  ? C.leafB
+                          : (ts.phase >= 1 && isCand)        ? `${C.accent}99`
+                          : C.dimmer;
             return (
               <div key={i} style={{
                 padding: "5px 11px", borderRadius: 10, fontSize: 10, fontFamily: "inherit",
@@ -1693,9 +1805,12 @@ export default function RandomForestViz({ mode = "random-forest" }) {
                 transition: "all .3s ease-out", minWidth: 80, textAlign: "center",
               }}>
                 {f}
-                {showGini && (isCand || (isGlobalBest && ts.phase >= 2)) && (
-                  <div style={{ fontSize: 7.5, marginTop: 1, opacity: 0.75 }}>
+                {showGini && (
+                  <div style={{ fontSize: 7.5, marginTop: 1, color: giniCol }}>
                     {activeTaskType === "regression" ? "MSE" : "G"}={ev.gini.toFixed(3)}
+                    {isGlobalBest && ts.phase >= 2 && (
+                      <span style={{ marginLeft: 3, fontSize: 6.5, opacity: 0.85 }}>← true best</span>
+                    )}
                   </div>
                 )}
               </div>

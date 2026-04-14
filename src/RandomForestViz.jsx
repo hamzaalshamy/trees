@@ -4,6 +4,7 @@ import Papa from "papaparse";
 import { C } from "./theme";
 import GlobalHeader from "./GlobalHeader";
 import { heartData, heartMeta } from "./data/heartDisease";
+import { musicData, musicMeta } from "./data/musicData";
 import { predictRow } from "./cartAlgorithm";
 import TreeWorker from "./treeWorker.js?worker";
 
@@ -732,36 +733,21 @@ export default function RandomForestViz({ mode = "random-forest" }) {
   const lockedMaxFeatures = (mode === "decision-tree" || mode === "bagging") ? "all" : null;
 
   // ── Dataset state ──────────────────────────────────────────────────────────
+  const [builtinDataset, setBuiltinDataset] = useState("heart"); // "heart" | "music"
   const [customDataset, setCustomDataset] = useState(null);
+  const fileInputRef = useRef(null);
   const [csvModal, setCsvModal]           = useState(null);
   const [dragOver, setDragOver]           = useState(false);
   const [selectedSampleIdx, setSelectedSampleIdx] = useState(null);
   const [oobTooltipVisible, setOobTooltipVisible] = useState(false);
 
-  const activeData      = customDataset?.data        ?? heartData;
-  const activeFeatures  = customDataset?.features    ?? heartMeta.features;
-  const activeTargetCol = customDataset?.targetCol   ?? heartMeta.targetCol;
-  const classLabels     = customDataset?.classLabels ?? heartMeta.targetLabels;
+  const builtinMeta     = builtinDataset === "music" ? musicMeta : heartMeta;
+  const builtinData     = builtinDataset === "music" ? musicData : heartData;
+  const activeData      = customDataset?.data        ?? builtinData;
+  const activeFeatures  = customDataset?.features    ?? builtinMeta.features;
+  const activeTargetCol = customDataset?.targetCol   ?? builtinMeta.targetCol;
+  const classLabels     = customDataset?.classLabels ?? builtinMeta.targetLabels;
   const activeTaskType  = customDataset?.taskType    ?? "classification";
-  const datasetLabel   = customDataset?.name
-    ? (() => {
-        const { name, totalRows, sampledRows } = customDataset;
-        const feats = activeFeatures.length;
-        if (totalRows && sampledRows < totalRows) {
-          return `${name} — ${sampledRows.toLocaleString()}/${totalRows.toLocaleString()} sampled rows, ${feats} features`;
-        }
-        return `${name} — ${activeData.length.toLocaleString()} rows, ${feats} features`;
-      })()
-    : heartMeta.description;
-  const datasetTooltip = customDataset ? null : heartMeta.tooltip;
-  const datasetLine = customDataset
-    ? (() => {
-        const taskStr = activeTaskType === "regression"
-          ? "regression"
-          : `${classLabels.length === 2 ? "binary" : classLabels.length + "-class"} classification`;
-        return `Using: ${customDataset.name} · ${activeData.length.toLocaleString()} samples · ${activeFeatures.length} features · ${taskStr}`;
-      })()
-    : `Using: Heart Disease Dataset · ${heartData.length} samples · ${heartMeta.features.length} features · binary classification`;
 
   // ── Hyperparameter state ───────────────────────────────────────────────────
   const [maxDepth, setMaxDepth]         = useState(3);
@@ -883,6 +869,16 @@ export default function RandomForestViz({ mode = "random-forest" }) {
     buildForestWithData(activeData, activeFeatures, activeTargetCol, activeTaskType);
   }, [buildForestWithData, activeData, activeFeatures, activeTargetCol, activeTaskType]);
 
+  const switchToBuiltin = useCallback((key) => {
+    if (growRef.current) { cancelRef.current = true; growRef.current = false; setGrowing(false); }
+    setBuiltinDataset(key);
+    setCustomDataset(null);
+    setSelectedSampleIdx(null);
+    const d = key === "music" ? musicData : heartData;
+    const m = key === "music" ? musicMeta : heartMeta;
+    buildForestWithData(d, m.features, m.targetCol, "classification");
+  }, [buildForestWithData]);
+
   useEffect(() => {
     const pending = location.state?.pendingCSV;
     if (pending) {
@@ -939,25 +935,6 @@ export default function RandomForestViz({ mode = "random-forest" }) {
     const s = steps[targetIdx];
     setTS(treeIdx, { visibleIds: vis, nodeId: s.nodeId, phase: s.phase, stepIdx: targetIdx });
   }, [getSteps, setTS]);
-
-  const autoGrow = useCallback(async (treeIdx) => {
-    if (growRef.current) return;
-    growRef.current   = true;
-    cancelRef.current = false;
-    setGrowing(true);
-    setTS(treeIdx, EMPTY_TS);
-    await new Promise(r => setTimeout(r, 80));
-    const steps = getSteps(treeIdx);
-    for (let i = 0; i < steps.length; i++) {
-      if (cancelRef.current) break;
-      const vis = [];
-      for (let j = 0; j <= i; j++) { if (steps[j].commit && !vis.includes(steps[j].nodeId)) vis.push(steps[j].nodeId); }
-      setTS(treeIdx, { visibleIds: vis, nodeId: steps[i].nodeId, phase: steps[i].phase, stepIdx: i });
-      await new Promise(r => setTimeout(r, 400 / speed));
-    }
-    growRef.current = false;
-    setGrowing(false);
-  }, [getSteps, setTS, speed]);
 
   const autoGrowAll = useCallback(async () => {
     if (growRef.current) return;
@@ -1303,6 +1280,10 @@ export default function RandomForestViz({ mode = "random-forest" }) {
         />
       )}
 
+      {/* Shared hidden CSV input — triggered by both the dropdown and the header button */}
+      <input ref={fileInputRef} type="file" accept=".csv" style={{ display: "none" }}
+        onChange={e => { openFile(e.target.files[0]); e.target.value = ""; }} />
+
       {/* Global Header */}
       <GlobalHeader
         breadcrumb={[
@@ -1319,40 +1300,47 @@ export default function RandomForestViz({ mode = "random-forest" }) {
             <HintTooltip />
           </span>
         }
-        detail={
-          <div style={{ display: "flex", alignItems: "center", gap: 12, width: "100%" }}>
-            <span style={{
-              fontSize: 10,
-              color: "#94a3b8",
-              fontFamily: "'JetBrains Mono',monospace",
-              flex: 1,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}>
-              {datasetLine}
-            </span>
-            <label style={{
-              fontSize: 10, color: C.dim, cursor: "pointer",
-              fontFamily: "'JetBrains Mono',monospace",
-              flexShrink: 0,
-              transition: "color 0.15s",
+        right={
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            title="Upload a CSV file to use as your dataset"
+            onMouseEnter={e => { e.currentTarget.style.color = C.accent; }}
+            onMouseLeave={e => { e.currentTarget.style.color = C.dim; }}
+            style={{
+              background: "none", border: "none", cursor: "pointer",
+              fontSize: 11, color: C.dim, fontFamily: "'JetBrains Mono',monospace",
+              fontWeight: 600, padding: 0, transition: "color 0.15s",
             }}
-              onMouseEnter={e => e.currentTarget.style.color = C.accent}
-              onMouseLeave={e => e.currentTarget.style.color = C.dim}
+          >
+            ↑ Upload CSV
+          </button>
+        }
+        detail={
+          <div style={{ display: "flex", alignItems: "center", gap: 10, width: "100%" }}>
+            <label style={{
+              fontSize: 9, color: C.dimmer, fontFamily: "'JetBrains Mono',monospace",
+              flexShrink: 0, whiteSpace: "nowrap",
+            }}>Dataset</label>
+            <select
+              value={customDataset ? "custom" : builtinDataset}
+              disabled={!!buildProgress || growing}
+              onChange={e => {
+                const val = e.target.value;
+                if (val === "upload") { fileInputRef.current?.click(); return; }
+                if (val === "custom") return;
+                switchToBuiltin(val);
+              }}
+              style={{
+                ...inp, fontSize: 10, padding: "1px 6px", cursor: (buildProgress || growing) ? "default" : "pointer",
+                flex: 1, maxWidth: 340, height: 22,
+                opacity: (buildProgress || growing) ? 0.5 : 1,
+              }}
             >
-              Change dataset
-              <input type="file" accept=".csv" style={{ display: "none" }}
-                onChange={e => { openFile(e.target.files[0]); e.target.value = ""; }} />
-            </label>
-            {customDataset && (
-              <button
-                onClick={() => { setCustomDataset(null); setSelectedSampleIdx(null); buildForestWithData(heartData, heartMeta.features, heartMeta.targetCol, "classification"); }}
-                style={{ ...inp, fontSize: 10, padding: "2px 9px", cursor: "pointer", boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.08)", flexShrink: 0 }}
-              >
-                ↩ Reset
-              </button>
-            )}
+              <option value="heart">Heart Disease (binary, {heartData.length} samples)</option>
+              <option value="music">Music Genres (10 classes, {musicData.length} samples)</option>
+              {customDataset && <option value="custom">Custom: {customDataset.name}</option>}
+              <option value="upload">Upload your own CSV…</option>
+            </select>
           </div>
         }
       />

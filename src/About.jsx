@@ -15,7 +15,6 @@ export default function About() {
         minHeight: "100vh",
         background: C.bg,
         color: C.text,
-        fontFamily: "'JetBrains Mono','Fira Code',monospace",
         display: "flex",
         flexDirection: "column",
       }}

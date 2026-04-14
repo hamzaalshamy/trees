@@ -49,7 +49,6 @@ export default function GlobalHeader({ breadcrumb, description, detail, center, 
         >
           <span
             style={{
-              fontFamily: "'JetBrains Mono','Fira Code',monospace",
               fontWeight: 900,
               fontSize: 20,
               letterSpacing: "-0.5px",
@@ -85,7 +84,6 @@ export default function GlobalHeader({ breadcrumb, description, detail, center, 
               color: C.text,
               fontSize: 14,
               fontWeight: 600,
-              fontFamily: "'JetBrains Mono','Fira Code',monospace",
               transition: "color 0.15s",
             }}
             onMouseEnter={(e) => { e.currentTarget.style.color = C.accent; }}
@@ -121,7 +119,6 @@ export default function GlobalHeader({ breadcrumb, description, detail, center, 
                 alignItems: "center",
                 gap: 5,
                 fontSize: 10,
-                fontFamily: "'JetBrains Mono',monospace",
                 flexShrink: 0,
               }}
             >
@@ -167,7 +164,6 @@ export default function GlobalHeader({ breadcrumb, description, detail, center, 
               style={{
                 fontSize: 10,
                 color: C.dim,
-                fontFamily: "'JetBrains Mono',monospace",
               }}
             >
               {description}

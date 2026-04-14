@@ -1,3 +1,6 @@
+export const MONO = "'JetBrains Mono','Fira Code',monospace";
+export const SANS = "Inter, sans-serif";
+
 export const C = {
   bg: "#0a0e17", panel: "#111827", border: "#1e293b",
   text: "#e2e8f0", dim: "#64748b", dimmer: "#3d4a5c",

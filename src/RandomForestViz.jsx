@@ -433,16 +433,16 @@ function processCSVData(rawRows, headers, targetCol, naStrategy, sampleMode, sel
   if (rows.length === 0) return null;
 
   const totalRows = rows.length;
-  if (sampleMode === "1000" && rows.length > 1000) {
+  const sampleN = (typeof sampleMode === "number") ? Math.min(sampleMode, rows.length) : rows.length;
+  if (sampleN < rows.length) {
     if (taskType === "classification") {
-      rows = stratifiedSample(rows, targetCol, 1000);
+      rows = stratifiedSample(rows, targetCol, sampleN);
     } else {
-      // Random sample for regression (no discrete classes to stratify on)
       for (let i = rows.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [rows[i], rows[j]] = [rows[j], rows[i]];
       }
-      rows = rows.slice(0, 1000);
+      rows = rows.slice(0, sampleN);
     }
   }
   const sampledRows = rows.length;
@@ -502,24 +502,11 @@ function processCSVData(rawRows, headers, targetCol, naStrategy, sampleMode, sel
   return { data, features, targetCol: "target", totalRows, sampledRows, classLabels };
 }
 
-const SAMPLE_OPTIONS = [
-  { key: "1000", label: "Random sample: 1,000 rows", sub: "Stratified by target class" },
-  { key: "all",  label: "Use all rows",              sub: "May be slow for large datasets" },
-];
-
 // ─── CSV Modal ─────────────────────────────────────────────────────────────────
 function DataModal({ modal, onUpdate, onConfirm, onCancel }) {
   const { fileName, rawRows, headers, naStats, selectedTarget, naStrategy, sampleMode, selectedColumns, warning, taskType = "classification" } = modal;
   const includedCols = selectedColumns ?? headers;
-  const isLarge = rawRows.length > 1000;
-  const [previewOpen, setPreviewOpen] = useState(false);
-
-  const inp = {
-    padding: "5px 8px", borderRadius: 8, background: "#161c2a",
-    border: "none", color: C.text, fontSize: 11,
-    fontFamily: "'JetBrains Mono',monospace", outline: "none",
-    boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.08)",
-  };
+  const [previewOpen, setPreviewOpen] = useState(true);
 
   const toggleCol = (h) => {
     if (h === selectedTarget) return;
@@ -531,7 +518,7 @@ function DataModal({ modal, onUpdate, onConfirm, onCancel }) {
   };
 
   const handleConfirm = () => {
-    const result = processCSVData(rawRows, headers, selectedTarget, naStrategy, sampleMode ?? "1000", includedCols, taskType);
+    const result = processCSVData(rawRows, headers, selectedTarget, naStrategy, sampleMode ?? rawRows.length, includedCols, taskType);
     if (!result) return;
     onConfirm(result.data, result.features, result.targetCol,
               fileName.replace(".csv", ""), result.totalRows, result.sampledRows, result.classLabels, taskType);
@@ -540,257 +527,435 @@ function DataModal({ modal, onUpdate, onConfirm, onCancel }) {
   const featureCols  = headers.filter(h => h !== selectedTarget);
   const checkedCount = featureCols.filter(h => includedCols.includes(h)).length;
 
+  // Inject slider CSS once
+  useEffect(() => {
+    const id = "sampling-slider-style";
+    if (document.getElementById(id)) return;
+    const s = document.createElement("style");
+    s.id = id;
+    s.textContent = `
+      input.sampling-slider {
+        -webkit-appearance: none; appearance: none;
+        outline: none; cursor: pointer;
+        background: transparent; height: 24px; width: 100%;
+      }
+      input.sampling-slider::-webkit-slider-runnable-track {
+        height: 4px; background: transparent; border-radius: 2px;
+      }
+      input.sampling-slider::-moz-range-track {
+        height: 4px; background: transparent; border-radius: 2px;
+      }
+      input.sampling-slider::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        width: 18px; height: 18px; border-radius: 50%;
+        background: #f59e0b; cursor: pointer;
+        margin-top: -7px; border: none;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+        transition: box-shadow 0.15s ease, width 0.15s ease, height 0.15s ease, margin-top 0.15s ease;
+      }
+      input.sampling-slider:hover::-webkit-slider-thumb {
+        width: 20px; height: 20px; margin-top: -8px;
+        box-shadow: 0 1px 8px rgba(0,0,0,0.5), 0 0 0 5px rgba(245,158,11,0.18);
+      }
+      input.sampling-slider::-moz-range-thumb {
+        width: 18px; height: 18px; border-radius: 50%;
+        background: #f59e0b; cursor: pointer; border: none;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+      }
+    `;
+    document.head.appendChild(s);
+    return () => document.getElementById(id)?.remove();
+  }, []);
+
+  // ── Per-column stats for header tooltips ────────────────────────────────────
+  const colStats = useMemo(() => {
+    const stats = {};
+    for (const h of headers) {
+      const nonNA  = rawRows
+        .map(r => String(r[h] ?? "").trim())
+        .filter(v => !NA_VALS.has(v));
+      const unique = new Set(nonNA).size;
+      stats[h] = { unique, missing: naStats.byCol[h] ?? 0 };
+    }
+    return stats;
+  }, [rawRows, headers, naStats]);
+
+  const [colTooltip, setColTooltip] = useState(null); // { col, x, y }
+
+  // ── Shared style tokens ──────────────────────────────────────────────────────
+  const sectionLabel = {
+    fontSize: 10, color: C.text, fontWeight: 600,
+    display: "block", marginBottom: 8,
+  };
+  // iOS-style segmented pill track
+  const segTrack = {
+    display: "flex", background: "rgba(255,255,255,0.05)",
+    borderRadius: 100, padding: 3,
+  };
+  const segBtn = (active) => ({
+    flex: 1, padding: "7px 12px", borderRadius: 100, border: "none",
+    cursor: "pointer", fontSize: 10,
+    fontWeight: active ? 700 : 400,
+    background: active ? C.accent : "transparent",
+    color: active ? "#000" : C.dim,
+    transition: "background 0.2s ease-out, color 0.2s ease-out",
+  });
+
   return (
     <div style={{
-      position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 100,
+      position: "fixed", inset: 0, background: "rgba(4,8,18,0.82)", zIndex: 100,
       display: "flex", alignItems: "center", justifyContent: "center",
-      backdropFilter: "blur(4px)",
+      backdropFilter: "blur(8px)",
     }}>
       <div style={{
-        background: C.panel, borderRadius: 16,
-        boxShadow: "0 24px 64px rgba(0,0,0,0.7), inset 0 0 0 1px rgba(255,255,255,0.07)",
-        padding: 24, maxWidth: 480, width: "90vw", fontFamily: "'JetBrains Mono',monospace",
-        color: C.text, maxHeight: "88vh", overflowY: "auto",
+        background: "#12192b",
+        borderRadius: 20,
+        boxShadow: "0 8px 32px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.06)",
+        padding: "28px 28px 24px",
+        maxWidth: 500, width: "90vw",
+        color: C.text,
+        maxHeight: "88vh", overflowY: "auto",
+        scrollbarWidth: "thin", scrollbarColor: `${C.border} transparent`,
       }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: C.accent, marginBottom: 14 }}>
+
+        {/* Title */}
+        <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 4 }}>
           Configure dataset
         </div>
-
-        {/* File summary */}
-        <div style={{ fontSize: 10, color: C.dim, marginBottom: 16, lineHeight: 1.8 }}>
-          <div>📄 <strong style={{ color: C.text }}>{fileName}</strong></div>
-          <div>{rawRows.length.toLocaleString()} rows · {headers.length} columns</div>
-          {naStats.total > 0 && (
-            <div style={{ color: C.orange }}>⚠ {naStats.total} missing values found</div>
-          )}
-          {warning && <div style={{ color: C.red, marginTop: 4 }}>⚠ {warning}</div>}
+        <div style={{ fontSize: 10, color: C.dim, marginBottom: 22, lineHeight: 1.7 }}>
+          <span style={{ color: C.accent, fontWeight: 600 }}>{fileName}</span>
+          {"  ·  "}{rawRows.length.toLocaleString()} rows · {headers.length} columns
+          {naStats.total > 0 && <span style={{ color: C.orange, marginLeft: 8 }}>⚠ {naStats.total} missing</span>}
+          {warning && <div style={{ color: C.red, marginTop: 3, fontSize: 9 }}>⚠ {warning}</div>}
         </div>
 
-        {/* Data preview */}
-        <div style={{ marginBottom: 16 }}>
+        {/* ── Preview ────────────────────────────────────────────────────────── */}
+        <div style={{ marginBottom: 22 }}>
           <button
             onClick={() => setPreviewOpen(o => !o)}
             style={{
-              background: "none", border: "none", cursor: "pointer", padding: 0,
-              fontSize: 9, color: previewOpen ? C.accent : C.dim,
-              fontFamily: "'JetBrains Mono',monospace",
-              display: "flex", alignItems: "center", gap: 4,
-              transition: "color 0.15s",
+              display: "flex", alignItems: "center", gap: 7,
+              width: "100%", cursor: "pointer",
+              padding: "8px 12px", borderRadius: 9,
+              background: previewOpen ? "rgba(245,158,11,0.08)" : "rgba(255,255,255,0.04)",
+              border: "none",
+              boxShadow: previewOpen
+                ? `inset 0 0 0 1px ${C.accent}55`
+                : "inset 0 0 0 1px rgba(255,255,255,0.09)",
+              fontSize: 10, fontWeight: 500,
+              color: previewOpen ? C.accent : C.dim,
+              transition: "background 0.15s, box-shadow 0.15s, color 0.15s",
             }}
-            onMouseEnter={e => { e.currentTarget.style.color = C.accent; }}
-            onMouseLeave={e => { e.currentTarget.style.color = previewOpen ? C.accent : C.dim; }}
+            onMouseEnter={e => {
+              if (!previewOpen) {
+                e.currentTarget.style.background = "rgba(255,255,255,0.07)";
+                e.currentTarget.style.color = C.text;
+              }
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.background = previewOpen ? "rgba(245,158,11,0.08)" : "rgba(255,255,255,0.04)";
+              e.currentTarget.style.color = previewOpen ? C.accent : C.dim;
+            }}
           >
-            <span style={{ fontSize: 8, display: "inline-block", transition: "transform 0.15s", transform: previewOpen ? "rotate(90deg)" : "rotate(0deg)" }}>▶</span>
-            Preview data (first 100 rows)
+            <span style={{
+              fontSize: 10, lineHeight: 1,
+              display: "inline-block",
+              transition: "transform 0.2s ease-out",
+              transform: previewOpen ? "rotate(90deg)" : "rotate(0deg)",
+            }}>▶</span>
+            Preview &amp; select columns (first 100 rows)
           </button>
           {previewOpen && (
-            <div style={{
-              marginTop: 8, overflowX: "auto", overflowY: "auto", maxHeight: 300,
-              borderRadius: 8,
-              boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.07)",
-              background: "#0c1018",
-              scrollbarWidth: "thin", scrollbarColor: `${C.border} transparent`,
-            }}>
-              <table style={{
-                borderCollapse: "collapse", fontSize: 9,
-                fontFamily: "'JetBrains Mono',monospace",
-                whiteSpace: "nowrap", width: "100%",
+            <>
+              <div style={{
+                marginTop: 10, overflowX: "auto", overflowY: "auto", height: 290,
+                borderRadius: 12,
+                background: "#0a0f1a",
+                boxShadow: "0 0 0 1px rgba(255,255,255,0.06)",
+                scrollbarWidth: "thin", scrollbarColor: `${C.border} transparent`,
               }}>
-                <thead>
-                  <tr>
-                    {headers.map(h => (
-                      <th key={h} style={{
-                        padding: "5px 8px", textAlign: "left", fontWeight: 600,
-                        color: h === selectedTarget ? C.accent : C.dim,
-                        borderBottom: `1px solid rgba(255,255,255,0.07)`,
-                        background: "#0c1018",
-                        position: "sticky", top: 0,
-                        maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis",
-                      }}>
-                        {h}{h === selectedTarget && <span style={{ marginLeft: 3, fontSize: 7.5, color: C.accent, opacity: 0.8 }}>▸target</span>}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {rawRows.slice(0, 100).map((row, ri) => (
-                    <tr key={ri} style={{ background: ri % 2 === 1 ? "rgba(255,255,255,0.02)" : "transparent" }}>
-                      {headers.map(h => (
-                        <td key={h} style={{
-                          padding: "4px 8px", color: h === selectedTarget ? "#94a3b8" : C.dimmer,
-                          maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis",
-                          borderBottom: ri < 4 ? "1px solid rgba(255,255,255,0.03)" : "none",
-                          fontWeight: h === selectedTarget ? 500 : 400,
-                        }}>
-                          {String(row[h] ?? "—")}
-                        </td>
-                      ))}
+                <table style={{
+                  borderCollapse: "collapse", fontSize: 8.5,
+                  fontFamily: "'JetBrains Mono',monospace",
+                  whiteSpace: "nowrap", width: "100%",
+                  fontVariantNumeric: "tabular-nums",
+                }}>
+                  <thead>
+                    <tr>
+                      {headers.map(h => {
+                        const isTarget  = h === selectedTarget;
+                        const isChecked = isTarget || includedCols.includes(h);
+                        return (
+                          <th
+                            key={h}
+                            onClick={() => !isTarget && toggleCol(h)}
+                            onMouseEnter={e => {
+                              const r = e.currentTarget.getBoundingClientRect();
+                              setColTooltip({ col: h, x: r.left, y: r.bottom + 4 });
+                            }}
+                            onMouseLeave={() => setColTooltip(null)}
+                            style={{
+                              padding: "7px 10px", textAlign: "left",
+                              background: "#0a0f1a",
+                              position: "sticky", top: 0,
+                              boxShadow: "0 1px 0 rgba(255,255,255,0.08)",
+                              whiteSpace: "nowrap",
+                              cursor: isTarget ? "default" : "pointer",
+                              opacity: isChecked ? 1 : 0.35,
+                              transition: "opacity 0.15s",
+                              userSelect: "none",
+                            }}
+                          >
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              {/* Checkbox */}
+                              <div style={{
+                                width: 13, height: 13, borderRadius: 3, flexShrink: 0,
+                                background: isChecked ? (isTarget ? C.accent : C.accent) : "transparent",
+                                boxShadow: isChecked ? "none" : "0 0 0 1.5px rgba(255,255,255,0.25)",
+                                display: "flex", alignItems: "center", justifyContent: "center",
+                                transition: "background 0.15s, box-shadow 0.15s",
+                                opacity: isTarget ? 0.5 : 1,
+                              }}>
+                                {isChecked && (
+                                  <svg width="8" height="6" viewBox="0 0 8 6" fill="none">
+                                    <path d="M1 3L3 5L7 1" stroke="#000" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                  </svg>
+                                )}
+                              </div>
+                              {/* Label + NA count */}
+                              <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                                  <span style={{
+                                    fontWeight: 600, fontSize: 8.5,
+                                    color: isTarget ? C.accent : isChecked ? C.dim : C.dimmer,
+                                  }}>
+                                    {h}
+                                  </span>
+                                  {isTarget && (
+                                    <span style={{ fontSize: 7, color: C.accent, opacity: 0.65, fontWeight: 400 }}>target</span>
+                                  )}
+                                </div>
+                                {(naStats.byCol[h] ?? 0) > 0 && (
+                                  <span style={{ fontSize: 7, color: C.orange, opacity: 0.8, fontWeight: 400 }}>
+                                    {naStats.byCol[h]} missing
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </th>
+                        );
+                      })}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {rawRows.slice(0, 100).map((row, ri) => (
+                      <tr key={ri} style={{ background: ri % 2 === 1 ? "rgba(255,255,255,0.025)" : "transparent" }}>
+                        {headers.map(h => {
+                          const isTarget  = h === selectedTarget;
+                          const isChecked = isTarget || includedCols.includes(h);
+                          return (
+                            <td key={h} style={{
+                              padding: "3.5px 10px",
+                              color: isTarget ? "#94a3b8" : C.dimmer,
+                              fontWeight: isTarget ? 500 : 400,
+                              borderBottom: "1px solid rgba(255,255,255,0.025)",
+                              opacity: isChecked ? 1 : 0.25,
+                              transition: "opacity 0.15s",
+                            }}>
+                              {String(row[h] ?? "—")}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {/* Feature selection summary */}
+              <div style={{
+                marginTop: 7, fontSize: 9, color: C.dimmer,
+                display: "flex", alignItems: "center", gap: 6,
+              }}>
+                <span style={{ color: checkedCount < featureCols.length ? C.accent : C.dimmer, fontWeight: checkedCount < featureCols.length ? 600 : 400 }}>
+                  {checkedCount}/{featureCols.length} features selected
+                </span>
+                {checkedCount < featureCols.length && (
+                  <span>· {featureCols.length - checkedCount} excluded</span>
+                )}
+                <button
+                  onClick={() => onUpdate({ selectedColumns: headers })}
+                  style={{
+                    marginLeft: "auto", background: "none", border: "none",
+                    cursor: "pointer", fontSize: 8.5, color: C.dimmer,
+                    padding: 0,
+                    transition: "color 0.12s",
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.color = C.text; }}
+                  onMouseLeave={e => { e.currentTarget.style.color = C.dimmer; }}
+                >
+                  select all
+                </button>
+              </div>
+            </>
           )}
         </div>
 
-        {/* Task type */}
-        <div style={{ marginBottom: 16 }}>
-          <label style={{ fontSize: 9, color: C.dim, fontWeight: 400, display: "block", marginBottom: 6 }}>
-            Task type
-          </label>
-          <div style={{ display: "flex", gap: 8, marginBottom: 5 }}>
-            {["classification", "regression"].map(t => (
-              <button key={t} onClick={() => onUpdate({ taskType: t })} style={{
-                flex: 1, padding: "6px 10px", borderRadius: 9, fontSize: 10, cursor: "pointer",
-                fontFamily: "inherit", fontWeight: taskType === t ? 600 : 400,
-                background: taskType === t ? `${C.accent}22` : "rgba(255,255,255,0.04)",
-                border: "none",
-                boxShadow: taskType === t ? `inset 0 0 0 1px ${C.accent}66` : "inset 0 0 0 1px rgba(255,255,255,0.08)",
-                color: taskType === t ? C.accent : C.dim,
-                transition: "all 0.15s ease-out",
+        {/* ── Target column ──────────────────────────────────────────────────── */}
+        <div style={{ marginBottom: 22 }}>
+          <span style={sectionLabel}>Target column</span>
+          <div style={{ position: "relative" }}>
+            <select
+              value={selectedTarget}
+              onChange={e => {
+                const newTarget = e.target.value;
+                const detected  = detectTaskType(rawRows, newTarget);
+                onUpdate({ selectedTarget: newTarget, selectedColumns: headers, taskType: detected });
+              }}
+              onFocus={e => { e.target.style.boxShadow = `0 0 0 2px ${C.accent}44`; }}
+              onBlur={e => { e.target.style.boxShadow = "none"; }}
+              style={{
+                width: "100%", padding: "9px 32px 9px 12px",
+                background: "rgba(255,255,255,0.05)", borderRadius: 10,
+                border: "none", color: C.text, fontSize: 11,
+                fontFamily: "'JetBrains Mono',monospace",
+                cursor: "pointer", outline: "none",
+                appearance: "none", WebkitAppearance: "none",
+                transition: "box-shadow 0.15s",
               }}>
+              {headers.map(h => <option key={h} value={h}>{h}</option>)}
+            </select>
+            <span style={{
+              position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)",
+              pointerEvents: "none", color: C.dimmer, fontSize: 10, lineHeight: 1,
+            }}>▾</span>
+          </div>
+        </div>
+
+        {/* ── Task type ──────────────────────────────────────────────────────── */}
+        <div style={{ marginBottom: 22 }}>
+          <span style={sectionLabel}>Task type</span>
+          <div style={segTrack}>
+            {["classification", "regression"].map(t => (
+              <button key={t} onClick={() => onUpdate({ taskType: t })} style={segBtn(taskType === t)}>
                 {t === "classification" ? "Classification" : "Regression"}
               </button>
             ))}
           </div>
-          <div style={{ fontSize: 9, color: C.dimmer }}>
+          <div style={{ fontSize: 9, color: C.dimmer, marginTop: 7 }}>
             {taskType === "regression"
               ? "Predicts a continuous numeric value · MSE split criterion"
               : "Predicts a class label · Gini impurity split criterion"}
           </div>
         </div>
 
-        {/* Target column */}
-        <div style={{ marginBottom: 16 }}>
-          <label style={{ fontSize: 9, color: C.dim, fontWeight: 400, display: "block", marginBottom: 5 }}>
-            Target column
-          </label>
-          <select value={selectedTarget}
-            onChange={e => {
-              const newTarget = e.target.value;
-              const detected  = detectTaskType(rawRows, newTarget);
-              onUpdate({ selectedTarget: newTarget, selectedColumns: headers, taskType: detected });
-            }}
-            style={{ ...inp, width: "100%", cursor: "pointer" }}>
-            {headers.map(h => <option key={h} value={h}>{h}</option>)}
-          </select>
-          <div style={{ fontSize: 9, color: C.dimmer, marginTop: 3 }}>
-            {taskType === "regression"
-              ? "Numeric target — predicts continuous values"
-              : "Sorted unique values mapped to class labels"}
-          </div>
-        </div>
 
-        {/* Feature column selection */}
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 7 }}>
-            <label style={{ fontSize: 9, color: C.dim, fontWeight: 400 }}>
-              Select features to include
-            </label>
-            <span style={{ fontSize: 8.5, color: C.dimmer }}>
-              {checkedCount}/{featureCols.length} selected
-            </span>
-          </div>
-          <div style={{
-            maxHeight: 168, overflowY: "auto", display: "flex", flexDirection: "column", gap: 1,
-            background: "#0c1018", borderRadius: 10,
-            boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.06)",
-            padding: "4px 0",
-            scrollbarWidth: "thin", scrollbarColor: `${C.border} transparent`,
-          }}>
-            {/* Target row — always checked, disabled */}
-            <label style={{
-              display: "flex", alignItems: "center", gap: 8,
-              padding: "5px 12px", cursor: "default", opacity: 0.45,
-            }}>
-              <input type="checkbox" checked readOnly
-                style={{ accentColor: C.accent, cursor: "default", flexShrink: 0 }} />
-              <span style={{ fontSize: 10, color: C.dim, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {selectedTarget}
-              </span>
-              <span style={{ fontSize: 8, color: C.dimmer, flexShrink: 0 }}>target</span>
-            </label>
-            {featureCols.map(h => {
-              const checked = includedCols.includes(h);
-              return (
-                <label key={h} style={{
-                  display: "flex", alignItems: "center", gap: 8,
-                  padding: "5px 12px", cursor: "pointer",
-                  transition: "background 0.12s",
-                }}
-                onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.03)"; }}
-                onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
-                >
-                  <input type="checkbox" checked={checked} onChange={() => toggleCol(h)}
-                    style={{ accentColor: C.accent, cursor: "pointer", flexShrink: 0 }} />
-                  <span style={{
-                    fontSize: 10, color: checked ? C.text : C.dim,
-                    flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                    transition: "color 0.12s",
-                  }}>
-                    {h}
-                  </span>
-                </label>
-              );
-            })}
-          </div>
-        </div>
 
-        {/* NA strategy */}
+        {/* ── Missing values ─────────────────────────────────────────────────── */}
         {naStats.total > 0 && (
-          <div style={{ marginBottom: 16 }}>
-            <label style={{ fontSize: 9, color: C.dim, fontWeight: 400, display: "block", marginBottom: 6 }}>
-              Handle missing values
-            </label>
-            <div style={{ display: "flex", gap: 8 }}>
-              {["drop", "median"].map(s => (
-                <button key={s} onClick={() => onUpdate({ naStrategy: s })} style={{
-                  flex: 1, padding: "6px 10px", borderRadius: 9, fontSize: 10, cursor: "pointer",
-                  fontFamily: "inherit", fontWeight: naStrategy === s ? 600 : 400,
-                  background: naStrategy === s ? `${C.accent}22` : "rgba(255,255,255,0.04)",
-                  border: "none",
-                  boxShadow: naStrategy === s ? `inset 0 0 0 1px ${C.accent}66` : "inset 0 0 0 1px rgba(255,255,255,0.08)",
-                  color: naStrategy === s ? C.accent : C.dim,
-                  transition: "all 0.15s ease-out",
-                }}>
-                  {s === "drop" ? "Drop rows with NA" : "Fill with median"}
+          <div style={{ marginBottom: 22 }}>
+            <span style={sectionLabel}>Handle missing values</span>
+            <div style={segTrack}>
+              {[
+                { key: "drop", label: "Drop rows" },
+                { key: "median", label: "Fill with median" },
+              ].map(({ key, label }) => (
+                <button key={key} onClick={() => onUpdate({ naStrategy: key })} style={segBtn(naStrategy === key)}>
+                  {label}
                 </button>
               ))}
             </div>
           </div>
         )}
 
-        {/* Sampling — only shown for datasets over 1,000 rows */}
-        {isLarge && (
-          <div style={{ marginBottom: 16 }}>
-            <label style={{ fontSize: 9, color: C.dim, fontWeight: 400, display: "block", marginBottom: 6 }}>
-              Sampling
-            </label>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {SAMPLE_OPTIONS.map(opt => {
-                const active = (sampleMode ?? "1000") === opt.key;
-                return (
-                  <button key={opt.key} onClick={() => onUpdate({ sampleMode: opt.key })} style={{
-                    padding: "8px 12px", borderRadius: 9, fontSize: 10, cursor: "pointer",
-                    fontFamily: "inherit", textAlign: "left", display: "flex", justifyContent: "space-between", alignItems: "center",
-                    background: active ? `${C.accent}22` : "rgba(255,255,255,0.04)",
-                    border: "none",
-                    boxShadow: active ? `inset 0 0 0 1px ${C.accent}66` : "inset 0 0 0 1px rgba(255,255,255,0.08)",
-                    color: active ? C.accent : C.dim,
-                    fontWeight: active ? 600 : 400,
-                    transition: "all 0.15s ease-out",
+        {/* ── Sampling ───────────────────────────────────────────────────────── */}
+        {rawRows.length > 100 && (() => {
+          const sv        = typeof sampleMode === "number" ? sampleMode : Math.min(1000, rawRows.length);
+          const capVal    = Math.min(rawRows.length, 2000);
+          const atCap     = sv >= rawRows.length && rawRows.length < 2000;
+          const valuePct  = Math.min((sv - 100) / 1900 * 100, 100);
+          const capPct    = Math.min((capVal - 100) / 1900 * 100, 100);
+          const recommPct = (1000 - 100) / 1900 * 100; // ≈47.4%
+          const showRecomm = rawRows.length >= 1000;
+
+          const trackGrad = rawRows.length < 2000
+            ? `linear-gradient(to right, ${C.accent} 0% ${valuePct}%, rgba(255,255,255,0.09) ${valuePct}% ${capPct}%, rgba(255,255,255,0.03) ${capPct}% 100%)`
+            : `linear-gradient(to right, ${C.accent} 0% ${valuePct}%, rgba(255,255,255,0.09) ${valuePct}% 100%)`;
+
+          return (
+            <div style={{ marginBottom: 22 }}>
+              {/* Header row */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                <span style={sectionLabel}>Sampling</span>
+                <span style={{ fontSize: 13, lineHeight: 1 }}>
+                  <span style={{ fontWeight: 600, color: C.accent }}>{sv.toLocaleString()}</span>
+                  <span style={{ fontSize: 10, color: C.dim, marginLeft: 4 }}>rows</span>
+                </span>
+              </div>
+
+              {/* Slider */}
+              <div style={{ position: "relative", height: 24, marginBottom: 0 }}>
+                {/* Track */}
+                <div style={{
+                  position: "absolute", left: 0, right: 0, top: "50%",
+                  transform: "translateY(-50%)", height: 4, borderRadius: 2,
+                  background: trackGrad, pointerEvents: "none",
+                }} />
+                {/* Dataset limit tick */}
+                {rawRows.length < 2000 && (
+                  <div style={{
+                    position: "absolute", top: "50%", left: `${capPct}%`,
+                    transform: "translate(-50%, -50%)",
+                    width: 1.5, height: 8, borderRadius: 1,
+                    background: C.dimmer, pointerEvents: "none", opacity: 0.6,
+                  }} />
+                )}
+                <input
+                  type="range"
+                  className="sampling-slider"
+                  min={100} max={2000} step={100}
+                  value={sv}
+                  onChange={e => {
+                    const v = Math.min(+e.target.value, rawRows.length);
+                    onUpdate({ sampleMode: v });
+                  }}
+                />
+              </div>
+
+              {/* Scale labels row with recommended marker */}
+              <div style={{ position: "relative", height: 20, marginBottom: 6 }}>
+                <span style={{ position: "absolute", left: 0, fontSize: 7.5, color: C.text, top: 4 }}>100</span>
+                <span style={{ position: "absolute", right: 0, fontSize: 7.5, color: C.text, top: 4 }}>2,000</span>
+                {showRecomm && (
+                  <div style={{
+                    position: "absolute", top: 0, left: `${recommPct}%`,
+                    transform: "translateX(-50%)",
+                    display: "flex", flexDirection: "column", alignItems: "center",
+                    pointerEvents: "none",
                   }}>
-                    <span>{opt.label}</span>
-                    <span style={{ fontSize: 8, opacity: 0.6 }}>{opt.sub}</span>
-                  </button>
-                );
-              })}
+                    <div style={{ width: 1, height: 5, background: C.dim }} />
+                    <span style={{ fontSize: 7, color: C.dim, whiteSpace: "nowrap", marginTop: 1 }}>
+                      recommended
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* Notes */}
+              {atCap ? (
+                <div style={{ fontSize: 9, color: C.orange }}>
+                  Dataset only has {rawRows.length.toLocaleString()} rows — using all data
+                </div>
+              ) : (
+                <div style={{ fontSize: 9, color: C.dimmer }}>
+                  Stratified sampling preserves class proportions
+                </div>
+              )}
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* Privacy note */}
-        <div style={{ fontSize: 9, color: C.dimmer, marginBottom: 16, textAlign: "center" }}>
+        <div style={{ fontSize: 8.5, color: C.dimmer, marginBottom: 20, textAlign: "center", letterSpacing: "0.02em" }}>
           🔒 Your data never leaves your browser
         </div>
 
@@ -798,23 +963,56 @@ function DataModal({ modal, onUpdate, onConfirm, onCancel }) {
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={onCancel}
             onMouseEnter={e => { e.currentTarget.style.color = C.text; e.currentTarget.style.background = "rgba(255,255,255,0.06)"; }}
-            onMouseLeave={e => { e.currentTarget.style.color = C.dim; e.currentTarget.style.background = "none"; }}
+            onMouseLeave={e => { e.currentTarget.style.color = C.dim; e.currentTarget.style.background = "transparent"; }}
             style={{
-              flex: 1, padding: "9px", borderRadius: 10, border: "none",
-              background: "none", color: C.dim, fontSize: 11, fontFamily: "inherit", cursor: "pointer",
-              transition: "color 0.15s ease-out, background 0.15s ease-out",
+              flex: 1, padding: "10px", borderRadius: 12, border: "none",
+              background: "transparent", color: C.dim, fontSize: 11,
+              fontFamily: "inherit", cursor: "pointer",
+              transition: "color 0.15s, background 0.15s",
             }}>Cancel</button>
-          <button onClick={handleConfirm} style={{
-            flex: 2, padding: "9px", borderRadius: 10, border: "none",
-            background: `linear-gradient(135deg,${C.accent},#d97706)`,
-            color: "#000", fontSize: 11, fontFamily: "inherit", cursor: "pointer", fontWeight: 700,
-            transition: "transform 0.15s ease-out",
-          }}
-          onMouseEnter={e => { e.currentTarget.style.transform = "scale(1.02)"; }}
-          onMouseLeave={e => { e.currentTarget.style.transform = "scale(1)"; }}
-          >Confirm &amp; Build</button>
+          <button onClick={handleConfirm}
+            onMouseEnter={e => { e.currentTarget.style.transform = "scale(1.02)"; }}
+            onMouseLeave={e => { e.currentTarget.style.transform = "scale(1)"; }}
+            style={{
+              flex: 2, padding: "10px", borderRadius: 12, border: "none",
+              background: `linear-gradient(135deg,${C.accent},#d97706)`,
+              color: "#000", fontSize: 11, fontFamily: "inherit",
+              cursor: "pointer", fontWeight: 700,
+              transition: "transform 0.15s ease-out",
+            }}>Confirm &amp; Build</button>
         </div>
       </div>
+
+      {/* ── Column header tooltip ──────────────────────────────────────────── */}
+      {colTooltip && colStats[colTooltip.col] && (() => {
+        const s = colStats[colTooltip.col];
+        return (
+          <div style={{
+            position: "fixed",
+            left: Math.min(colTooltip.x, window.innerWidth - 160),
+            top: colTooltip.y,
+            zIndex: 9999,
+            background: "#1a2235",
+            borderRadius: 8,
+            padding: "8px 11px",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.6), inset 0 0 0 1px rgba(255,255,255,0.08)",
+            pointerEvents: "none",
+          }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 9, color: C.dim }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
+                <span>Unique values</span>
+                <span style={{ color: C.text, fontFamily: "'JetBrains Mono',monospace" }}>{s.unique}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
+                <span>Missing</span>
+                <span style={{ color: s.missing > 0 ? C.orange : C.dim, fontFamily: "'JetBrains Mono',monospace" }}>
+                  {s.missing}
+                </span>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -858,6 +1056,12 @@ export default function RandomForestViz({ mode = "random-forest" }) {
   const growRef   = useRef(false);
   const cancelRef = useRef(false);
   const workerRef = useRef(null);
+
+  const [tabTooltip, setTabTooltip]         = useState(null); // { x, y }
+  const [dragRange, setDragRange]           = useState(null); // { start, end } | null
+  const dragRef    = useRef({ active: false, startIdx: null, endIdx: null, moved: false });
+  const tabRefs    = useRef([]);
+  const tabScrollRef = useRef(null);
 
   const [zoom, setZoom]                     = useState(1);
   const [pan, setPan]                       = useState({ x: 0, y: 0 });
@@ -979,12 +1183,11 @@ export default function RandomForestViz({ mode = "random-forest" }) {
       if (rawRows.length) {
         const headers    = meta.fields;
         const naStats    = detectNAs(rawRows, headers);
-        const isLarge    = rawRows.length > 1000;
         const initTarget = headers[headers.length - 1];
         const modal = {
           fileName: pending.name, rawRows, headers, naStats,
           selectedTarget: initTarget,
-          naStrategy: "drop", sampleMode: isLarge ? "1000" : "all",
+          naStrategy: "drop", sampleMode: Math.min(1000, rawRows.length),
           selectedColumns: headers,
           taskType: detectTaskType(rawRows, initTarget),
         };
@@ -1050,7 +1253,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
           if (steps[j].commit && !vis.includes(steps[j].nodeId)) vis.push(steps[j].nodeId);
         }
         setTS(treeIdx, { visibleIds: vis, nodeId: steps[i].nodeId, phase: steps[i].phase, stepIdx: i });
-        await new Promise(r => setTimeout(r, 400 / speed));
+        await new Promise(r => setTimeout(r, 200 / speed));
       }
 
       if (!cancelRef.current && treeIdx < trees.length - 1) {
@@ -1147,6 +1350,25 @@ export default function RandomForestViz({ mode = "random-forest" }) {
     centerTree(curTree);
   }, [curTree, trees, centerTree]);
 
+  // ── Drag-to-complete global mouseup ───────────────────────────────────────
+  useEffect(() => {
+    const onMouseUp = () => {
+      if (!dragRef.current.active) return;
+      const { startIdx, endIdx, moved } = dragRef.current;
+      dragRef.current = { active: false, startIdx: null, endIdx: null, moved: false };
+      setDragRange(null);
+      if (moved && startIdx !== null && endIdx !== null) {
+        const lo = Math.min(startIdx, endIdx);
+        const hi = Math.max(startIdx, endIdx);
+        for (let j = lo; j <= hi; j++) {
+          instantComplete(j);
+        }
+      }
+    };
+    window.addEventListener("mouseup", onMouseUp);
+    return () => window.removeEventListener("mouseup", onMouseUp);
+  }, [instantComplete]);
+
   // ── File drop handling ─────────────────────────────────────────────────────
   const openFile = useCallback((file) => {
     if (!file || !file.name.toLowerCase().endsWith(".csv")) return;
@@ -1156,13 +1378,11 @@ export default function RandomForestViz({ mode = "random-forest" }) {
       if (!rawRows.length) return;
       const headers    = meta.fields;
       const naStats    = detectNAs(rawRows, headers);
-      const isLarge    = rawRows.length > 1000;
-      const sampleMode = isLarge ? "1000" : "all";
       const initTarget = headers[headers.length - 1];
       setCsvModal({
         fileName: file.name, rawRows, headers, naStats,
         selectedTarget: initTarget,
-        naStrategy: "drop", sampleMode,
+        naStrategy: "drop", sampleMode: Math.min(1000, rawRows.length),
         selectedColumns: headers,
         taskType: detectTaskType(rawRows, initTarget),
       });
@@ -1307,7 +1527,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div
-      style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'JetBrains Mono','Fira Code',monospace" }}
+      style={{ minHeight: "100vh", background: C.bg, color: C.text }}
       onDragOver={e => { e.preventDefault(); setDragOver(true); }}
       onDragLeave={() => setDragOver(false)}
       onDrop={handleDrop}
@@ -1325,7 +1545,6 @@ export default function RandomForestViz({ mode = "random-forest" }) {
         }}>
           <div style={{
             fontSize: 15, fontWeight: 700, color: C.text,
-            fontFamily: "'JetBrains Mono',monospace",
           }}>
             Building forest… {buildProgress.done}/{buildProgress.total} trees
           </div>
@@ -1342,7 +1561,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
               transition: "width 0.15s ease-out",
             }} />
           </div>
-          <div style={{ fontSize: 10, color: C.dim, fontFamily: "'JetBrains Mono',monospace" }}>
+          <div style={{ fontSize: 10, color: C.dim }}>
             {buildProgress.total - buildProgress.done > 0
               ? `${buildProgress.total - buildProgress.done} tree${buildProgress.total - buildProgress.done === 1 ? "" : "s"} remaining`
               : "Finalising…"}
@@ -1400,7 +1619,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
             onMouseLeave={e => { e.currentTarget.style.color = C.dim; }}
             style={{
               background: "none", border: "none", cursor: "pointer",
-              fontSize: 11, color: C.dim, fontFamily: "'JetBrains Mono',monospace",
+              fontSize: 11, color: C.dim,
               fontWeight: 600, padding: 0, transition: "color 0.15s",
             }}
           >
@@ -1410,7 +1629,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
         detail={
           <div style={{ display: "flex", alignItems: "center", gap: 10, width: "100%" }}>
             <label style={{
-              fontSize: 9, color: C.dimmer, fontFamily: "'JetBrains Mono',monospace",
+              fontSize: 9, color: C.dimmer,
               flexShrink: 0, whiteSpace: "nowrap",
             }}>Dataset</label>
             <select
@@ -1500,29 +1719,36 @@ export default function RandomForestViz({ mode = "random-forest" }) {
               transition: "color 0.15s ease-out, background 0.15s ease-out",
               opacity: buildProgress ? 0.4 : 1,
             }}>↻ Rebuild</button>
-          <button
-            disabled={!!buildProgress}
-            onClick={() => {
-              if (buildProgress) return;
-              if (growing) { cancelRef.current = true; growRef.current = false; setGrowing(false); }
-              else autoGrowAll();
-            }}
-            onMouseEnter={e => { if (!buildProgress) e.currentTarget.style.transform = "scale(1.03)"; }}
-            onMouseLeave={e => { e.currentTarget.style.transform = "scale(1)"; }}
-            style={{
-              padding: "8px 22px", borderRadius: 10, border: "none",
-              background: buildProgress
-                ? "linear-gradient(135deg,#334155,#1e293b)"
-                : growing
-                ? "linear-gradient(135deg,#64748b,#475569)"
-                : `linear-gradient(135deg,${C.accent},#d97706)`,
-              color: (buildProgress || growing) ? C.text : "#000", fontSize: 12, fontFamily: "inherit",
-              cursor: buildProgress ? "default" : "pointer", fontWeight: 700,
-              transition: "transform 0.15s ease-out, background 0.2s ease-out",
-              animation: (buildProgress || growing) ? "none" : "growPulse 2.5s ease-in-out infinite",
-            }}>
-            {buildProgress ? "Building…" : growing ? "■ Stop" : "▶ Grow"}
-          </button>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+            <button
+              disabled={!!buildProgress}
+              onClick={() => {
+                if (buildProgress) return;
+                if (growing) { cancelRef.current = true; growRef.current = false; setGrowing(false); }
+                else autoGrowAll();
+              }}
+              onMouseEnter={e => { if (!buildProgress) e.currentTarget.style.transform = "scale(1.03)"; }}
+              onMouseLeave={e => { e.currentTarget.style.transform = "scale(1)"; }}
+              style={{
+                padding: "8px 22px", borderRadius: 10, border: "none",
+                background: buildProgress
+                  ? "linear-gradient(135deg,#334155,#1e293b)"
+                  : growing
+                  ? "linear-gradient(135deg,#64748b,#475569)"
+                  : `linear-gradient(135deg,${C.accent},#d97706)`,
+                color: (buildProgress || growing) ? C.text : "#000", fontSize: 12, fontFamily: "inherit",
+                cursor: buildProgress ? "default" : "pointer", fontWeight: 700,
+                transition: "transform 0.15s ease-out, background 0.2s ease-out",
+                animation: (buildProgress || growing) ? "none" : "growPulse 2.5s ease-in-out infinite",
+              }}>
+              {buildProgress ? "Building…" : growing ? "■ Stop" : "▶ Grow"}
+            </button>
+            {!growing && !buildProgress && (
+              <div style={{ fontSize: 8.5, color: C.dim }}>
+                or use ← → arrow keys
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -1535,37 +1761,101 @@ export default function RandomForestViz({ mode = "random-forest" }) {
         position: "relative", zIndex: 4,
       }}>
         {/* Scrollable tabs area — only this region scrolls */}
-        {nEstimators > 1 && (
-          <div style={{
-            flex: 1, display: "flex", alignItems: "center", gap: 3,
-            overflowX: "auto", minWidth: 0, padding: "6px 0",
-            /* hide scrollbar visually but keep it functional */
-            scrollbarWidth: "none", msOverflowStyle: "none",
-          }}>
-            {trees.map((t, i) => {
-              const s       = treeStates[i];
-              const done    = t && s && s.stepIdx >= getSteps(i).length - 1 && getSteps(i).length > 0;
-              const loading = !t && buildProgress !== null;
-              return (
-                <button key={i}
-                  onClick={() => { if (!growing && !buildProgress && t) setCurTree(i); }}
-                  onDoubleClick={() => { if (!growing && !buildProgress && t) { setCurTree(i); instantComplete(i); } }}
-                  title={loading ? "Building…" : "Click to view · Double-click to instantly complete"}
-                  style={{
-                    padding: "3px 10px", borderRadius: 8, border: "none", flexShrink: 0,
-                    background: i === curTree ? C.accent : done ? `${C.accent}22` : "rgba(255,255,255,0.04)",
-                    color: i === curTree ? "#000" : done ? C.accent : loading ? C.dimmer : C.dim,
-                    fontSize: 10, fontFamily: "inherit", cursor: (loading || !t) ? "default" : "pointer",
-                    fontWeight: i === curTree ? 700 : 400,
-                    transition: "background 0.15s ease-out, color 0.15s ease-out",
-                    opacity: loading ? 0.5 : 1,
-                  }}>
-                  T{i + 1}{done ? " ✓" : ""}
-                </button>
-              );
-            })}
-          </div>
-        )}
+        {nEstimators > 1 && (() => {
+          // Compute selection overlay rect from tab DOM refs
+          let selRect = null;
+          if (dragRange !== null && tabScrollRef.current) {
+            const containerRect = tabScrollRef.current.getBoundingClientRect();
+            const lo = Math.min(dragRange.start, dragRange.end);
+            const hi = Math.max(dragRange.start, dragRange.end);
+            const startEl = tabRefs.current[lo];
+            const endEl   = tabRefs.current[hi];
+            if (startEl && endEl) {
+              const sR = startEl.getBoundingClientRect();
+              const eR = endEl.getBoundingClientRect();
+              selRect = {
+                left:   sR.left  - containerRect.left - 4,
+                top:    sR.top   - containerRect.top  - 4,
+                width:  eR.right - sR.left + 8,
+                height: sR.height + 8,
+              };
+            }
+          }
+          return (
+            <div style={{ position: "relative", flex: 1, minWidth: 0 }}>
+              {selRect && (
+                <div style={{
+                  position: "absolute",
+                  left: selRect.left, top: selRect.top,
+                  width: selRect.width, height: selRect.height,
+                  border: `1.5px dashed ${C.accent}`,
+                  borderRadius: 10, pointerEvents: "none", zIndex: 10,
+                  boxShadow: `0 0 8px ${C.accent}33`,
+                }} />
+              )}
+              <div ref={tabScrollRef} style={{
+                display: "flex", alignItems: "center", gap: 3,
+                overflowX: "auto", padding: "6px 0",
+                scrollbarWidth: "none", msOverflowStyle: "none",
+                cursor: dragRange !== null ? "grabbing" : "default",
+              }}>
+                {trees.map((t, i) => {
+                  const s       = treeStates[i];
+                  const done    = t && s && s.stepIdx >= getSteps(i).length - 1 && getSteps(i).length > 0;
+                  const loading = !t && buildProgress !== null;
+                  const inSel   = dragRange !== null && i >= Math.min(dragRange.start, dragRange.end) && i <= Math.max(dragRange.start, dragRange.end);
+                  return (
+                    <button key={i}
+                      ref={el => { tabRefs.current[i] = el; }}
+                      onClick={() => {
+                        if (!growing && !buildProgress && t && !dragRef.current.moved) setCurTree(i);
+                      }}
+                      onDoubleClick={() => {
+                        if (!growing && !buildProgress && t) { setCurTree(i); instantComplete(i); }
+                      }}
+                      onMouseDown={e => {
+                        if (loading || !t || growing || buildProgress) return;
+                        e.preventDefault();
+                        dragRef.current = { active: true, startIdx: i, endIdx: i, moved: false };
+                        setDragRange({ start: i, end: i });
+                        setTabTooltip(null);
+                      }}
+                      onMouseEnter={e => {
+                        if (dragRef.current.active && t && !loading && !growing && !buildProgress) {
+                          dragRef.current.endIdx = i;
+                          dragRef.current.moved  = i !== dragRef.current.startIdx;
+                          setDragRange({ start: dragRef.current.startIdx, end: i });
+                        } else if (t && !loading) {
+                          const r = e.currentTarget.getBoundingClientRect();
+                          setTabTooltip({ x: r.left + r.width / 2, y: r.bottom + 6 });
+                        }
+                      }}
+                      onMouseLeave={() => {
+                        if (!dragRef.current.active) setTabTooltip(null);
+                      }}
+                      style={{
+                        padding: "3px 10px", borderRadius: 8, flexShrink: 0,
+                        border: "1px solid transparent",
+                        background: i === curTree ? C.accent
+                          : inSel ? `${C.accent}18`
+                          : done  ? `${C.accent}22`
+                          : "rgba(255,255,255,0.04)",
+                        color: i === curTree ? "#000" : done ? C.accent : loading ? C.dimmer : C.dim,
+                        fontSize: 10, fontFamily: "inherit",
+                        cursor: (loading || !t) ? "default" : "pointer",
+                        fontWeight: i === curTree ? 700 : 400,
+                        transition: "background 0.15s ease-out, color 0.15s ease-out",
+                        opacity: loading ? 0.5 : 1,
+                        userSelect: "none",
+                      }}>
+                      T{i + 1}{done ? " ✓" : ""}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
         {nEstimators === 1 && <div style={{ flex: 1 }} />}
 
         {/* Pinned right side — never scrolls: Complete all | step controls | bootstrap | Reset */}
@@ -1799,7 +2089,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
                           : C.dimmer;
             return (
               <div key={i} style={{
-                padding: "5px 11px", borderRadius: 10, fontSize: 10, fontFamily: "inherit",
+                padding: "5px 11px", borderRadius: 10, fontSize: 10, fontFamily: "'JetBrains Mono',monospace",
                 fontWeight: (isBest && ts.phase >= 2) ? 600 : 400,
                 background: bg, color: col, boxShadow: shd,
                 transition: "all .3s ease-out", minWidth: 80, textAlign: "center",
@@ -2144,7 +2434,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
                 style={{
                   flexShrink: 0, padding: "5px 12px", borderRadius: 8, border: "none",
                   background: "rgba(255,255,255,0.05)", color: C.dim, fontSize: 10,
-                  fontFamily: "'JetBrains Mono',monospace", cursor: "pointer",
+                  cursor: "pointer",
                   boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.06)",
                   transition: "color .15s, background .15s",
                 }}
@@ -2364,6 +2654,27 @@ export default function RandomForestViz({ mode = "random-forest" }) {
       <div style={{ padding: "8px 16px", boxShadow: "0 -1px 0 rgba(255,255,255,0.04)", fontSize: 8.5, color: C.dimmer, textAlign: "center" }}>
         max_features={subsetSize}/{activeFeatures.length} · Trees: {nEstimators} · Bootstrap n={TOTAL_SAMPLES}
       </div>
+
+      {/* Tree tab tooltip */}
+      {tabTooltip && (
+        <div style={{
+          position: "fixed",
+          left: tabTooltip.x,
+          top: tabTooltip.y,
+          transform: "translateX(-50%)",
+          zIndex: 9999,
+          background: "#1a2235",
+          borderRadius: 7,
+          padding: "5px 10px",
+          fontSize: 9,
+          color: C.dim,
+          boxShadow: "0 4px 16px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(255,255,255,0.07)",
+          pointerEvents: "none",
+          whiteSpace: "nowrap",
+        }}>
+          Double-click to instantly complete this tree
+        </div>
+      )}
     </div>
   );
 }

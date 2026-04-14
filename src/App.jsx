@@ -17,7 +17,6 @@ function MobileOverlay() {
       display: 'flex', flexDirection: 'column',
       alignItems: 'center', justifyContent: 'center',
       padding: '32px 28px',
-      fontFamily: "'JetBrains Mono','Fira Code',monospace",
     }}>
       {/* Logo */}
       <span style={{

@@ -1,16 +1,62 @@
-# React + Vite
+# Trees
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Interactive visualizer for tree-based ML algorithms. Watch decision trees, bagging, and random forests build step by step on real data.
 
-Currently, two official plugins are available:
+[screenshot of landing page: docs/images/landing.png]
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## What it does
 
-## React Compiler
+Trees lets you watch machine learning algorithms think. Step through tree construction one node at a time, see which features are evaluated, understand why the algorithm picks each split, and watch the ensemble come together.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+[screenshot of tree growing with feature pool: docs/images/tree-growing.png]
 
-## Expanding the ESLint configuration
+### Feature selection visualization
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+At each split, the feature pool shows every feature's Gini impurity. Candidate features light up in orange, the chosen best turns green — and when the true best wasn't in the random subset, it highlights in red so you can see the cost of randomness.
+
+[screenshot of feature pool: docs/images/feature-pool.png]
+
+### Prediction & path tracing
+
+Select any sample from the dataset and watch it travel through each tree in the forest. The path lights up from root to leaf, every tree casts its vote, and the majority determines the prediction.
+
+[screenshot of prediction with path: docs/images/prediction.png]
+
+### Bring your own data
+
+Drop any CSV file. Trees parses it in your browser, lets you pick the target column, handle missing values, select features, and choose between classification and regression. Your data never leaves your browser.
+
+[screenshot of CSV modal: docs/images/csv-upload.png]
+
+## Supported algorithms
+
+- **Decision Tree** — single tree, all features, no ensemble
+- **Bagging** — bootstrap ensemble, all features at each split  
+- **Random Forest** — bootstrap ensemble with random feature subsampling
+- **AdaBoost** — coming soon
+- **Gradient Boosting** — *May* come soon, but unlikely
+
+## Features
+
+- Real CART algorithm with Gini impurity (classification) and MSE (regression)
+- Binary, multiclass, and regression support
+- Step-by-step animation with arrow key controls
+- Per-tree state preservation — switch between trees without losing progress
+- Bootstrap sampling with OOB accuracy
+- Two built-in datasets: Heart Disease (binary) and Music Genres (10-class)
+- CSV upload with preprocessing: missing value handling, column selection, one-hot encoding, stratified sampling
+
+## Tech stack
+
+React · Vite · Papaparse · Web Workers · No backend — entirely client-side
+
+## Run locally
+
+npm install
+npm run dev
+
+Open http://localhost:5173
+
+## Built by
+
+Hamza Alshamy — hamzaalshamy.github.io

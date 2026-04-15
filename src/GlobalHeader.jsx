@@ -5,13 +5,10 @@ import { C } from "./theme";
  * GlobalHeader — persistent top bar used on every page.
  *
  * Props:
- *   breadcrumb  – array of { label, route? } items, e.g. [{ label:'Trees', route:'/' }, { label:'Random Forest' }]
- *                 rendered as "Trees → Random Forest" with the routed items clickable
- *   description – short algorithm description shown below the breadcrumb row (string or ReactNode)
- *   center      – ReactNode rendered in the middle of the main bar (dataset badge on algorithm pages)
- *   right       – ReactNode rendered on the right side (Upload CSV button, reset button, etc.)
+ *   right   – ReactNode on the right side of the main bar (Upload CSV, etc.)
+ *   infoBar – ReactNode rendered as a second row below the main bar (algorithm pages)
  */
-export default function GlobalHeader({ breadcrumb, description, detail, center, right }) {
+export default function GlobalHeader({ right, infoBar }) {
   const navigate = useNavigate();
 
   return (
@@ -24,7 +21,7 @@ export default function GlobalHeader({ breadcrumb, description, detail, center, 
         zIndex: 10,
       }}
     >
-      {/* ── Main bar ──────────────────────────────────────────────────────── */}
+      {/* ── Row 1: Logo + right actions ───────────────────────────────────── */}
       <div
         style={{
           height: 52,
@@ -39,22 +36,15 @@ export default function GlobalHeader({ breadcrumb, description, detail, center, 
           onClick={() => navigate("/")}
           title="Back to home"
           style={{
-            background: "none",
-            border: "none",
-            cursor: "pointer",
-            padding: 0,
-            lineHeight: 1,
-            flexShrink: 0,
+            background: "none", border: "none", cursor: "pointer",
+            padding: 0, lineHeight: 1, flexShrink: 0,
           }}
         >
           <span
             style={{
-              fontWeight: 900,
-              fontSize: 20,
-              letterSpacing: "-0.5px",
+              fontWeight: 900, fontSize: 20, letterSpacing: "-0.5px",
               background: `linear-gradient(135deg, ${C.accent}, ${C.green})`,
-              WebkitBackgroundClip: "text",
-              WebkitTextFillColor: "transparent",
+              WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
               backgroundClip: "text",
             }}
           >
@@ -62,128 +52,39 @@ export default function GlobalHeader({ breadcrumb, description, detail, center, 
           </span>
         </button>
 
-        {/* Center slot — dataset badge on algorithm pages */}
-        {center && (
-          <div style={{ flex: 1, display: "flex", justifyContent: "center" }}>
-            {center}
-          </div>
-        )}
+        <div style={{ flex: 1 }} />
 
-        {/* Spacer when no center slot */}
-        {!center && <div style={{ flex: 1 }} />}
-
-        {/* Right slot — About link + page-specific content (Upload CSV, reset, etc.) */}
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        {/* Right slot — About link + page-specific content */}
+        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
           <button
             onClick={() => navigate("/about")}
             style={{
-              background: "none",
-              border: "none",
-              cursor: "pointer",
-              padding: 0,
-              color: C.text,
-              fontSize: 14,
-              fontWeight: 600,
-              transition: "color 0.15s",
+              background: "none", border: "none", cursor: "pointer",
+              padding: 0, color: C.dim, fontSize: 13, fontWeight: 500,
+              transition: "color 0.15s", fontFamily: "inherit",
             }}
-            onMouseEnter={(e) => { e.currentTarget.style.color = C.accent; }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = C.text; }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = C.text; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = C.dim; }}
           >
             About
           </button>
-          {right && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              {right}
-            </div>
-          )}
+          {right}
         </div>
       </div>
 
-      {/* ── Breadcrumb + description row (algorithm pages only) ───────────── */}
-      {(breadcrumb || description) && (
+      {/* ── Row 2: Algorithm + dataset info bar (algorithm pages only) ────── */}
+      {infoBar && (
         <div
           style={{
-            height: 26,
+            borderTop: `1px solid rgba(255,255,255,0.05)`,
+            padding: "12px 24px",
             display: "flex",
             alignItems: "center",
-            padding: "0 24px",
-            gap: 12,
-            borderTop: `1px solid rgba(255,255,255,0.04)`,
+            justifyContent: "space-between",
+            gap: 24,
           }}
         >
-          {/* Breadcrumb */}
-          {breadcrumb && (
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 5,
-                fontSize: 10,
-                flexShrink: 0,
-              }}
-            >
-              {breadcrumb.map((item, i) => (
-                <span key={i} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                  {i > 0 && (
-                    <span style={{ color: C.dimmer, fontSize: 9 }}>›</span>
-                  )}
-                  {item.route ? (
-                    <button
-                      onClick={() => navigate(item.route)}
-                      style={{
-                        background: "none",
-                        border: "none",
-                        cursor: "pointer",
-                        padding: 0,
-                        color: C.dim,
-                        fontSize: 10,
-                        fontFamily: "inherit",
-                        textDecoration: "none",
-                      }}
-                      onMouseEnter={(e) => { e.target.style.color = C.text; }}
-                      onMouseLeave={(e) => { e.target.style.color = C.dim; }}
-                    >
-                      {item.label}
-                    </button>
-                  ) : (
-                    <span style={{ color: C.text, fontWeight: 600 }}>{item.label}</span>
-                  )}
-                </span>
-              ))}
-            </div>
-          )}
-
-          {/* Separator */}
-          {breadcrumb && description && (
-            <span style={{ color: C.dimmer, fontSize: 9 }}>·</span>
-          )}
-
-          {/* Algorithm description */}
-          {description && (
-            <span
-              style={{
-                fontSize: 10,
-                color: C.dim,
-              }}
-            >
-              {description}
-            </span>
-          )}
-        </div>
-      )}
-
-      {/* ── Dataset detail row (algorithm pages only) ─────────────────────── */}
-      {detail && (
-        <div
-          style={{
-            height: 28,
-            display: "flex",
-            alignItems: "center",
-            padding: "0 24px",
-            borderTop: `1px solid rgba(255,255,255,0.03)`,
-          }}
-        >
-          {detail}
+          {infoBar}
         </div>
       )}
     </div>

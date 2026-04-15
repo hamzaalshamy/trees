@@ -62,12 +62,13 @@ const COMING_SOON_DESC = {
 
 // Edge definitions: { from, to, label, grayed, delay }
 const EDGES = [
-  { from: "Decision Tree", to: "Bagging",           label: "+ bootstrap",         grayed: false, delay: 0.25 },
-  { from: "Decision Tree", to: "Boosting",           label: "+ sequential fitting", grayed: true,  delay: 0.25 },
-  { from: "Bagging",       to: "Random Forest",      label: "+ feature subsampling", grayed: false, delay: 0.65 },
-  { from: "Boosting",      to: "AdaBoost",            label: null,                 grayed: true,  delay: 0.65 },
-  { from: "Boosting",      to: "Gradient Boosting",   label: null,                 grayed: true,  delay: 0.65 },
+  { from: "Decision Tree", to: "Bagging",           label: "+ bootstrap",          grayed: false, delay: 0.25 },
+  { from: "Decision Tree", to: "Boosting",          label: "+ sequential fitting",  grayed: true,  delay: 0.25 },
+  { from: "Bagging",       to: "Random Forest",     label: "+ feature subsampling", grayed: false, delay: 0.65 },
+  { from: "Boosting",      to: "AdaBoost",           label: null,                   grayed: true,  delay: 0.65 },
+  { from: "Boosting",      to: "Gradient Boosting",  label: null,                   grayed: true,  delay: 0.65 },
 ];
+
 
 const NODE_DELAYS = {
   "Decision Tree":     0.05,
@@ -216,10 +217,9 @@ function GrayNode({ label, onComingSoon, animDelay }) {
       <text
         x={cx} y={cy + 4.5}
         textAnchor="middle"
-        fill={localHovered ? C.dim : C.dimmer}
+        fill={localHovered ? C.text : C.dim}
         fontSize={11}
         fontFamily="'JetBrains Mono',monospace"
-        opacity={0.65}
         style={{ transition: "fill 0.12s" }}
       >
         {label}
@@ -275,9 +275,9 @@ function IconUpload() {
 // ─── Main component ─────────────────────────────────────────────────────────────
 export default function TaxonomyMenu() {
   const navigate = useNavigate();
-  const [tooltip, setTooltip]         = useState(null); // { label, x, y } screen coords
-  const [comingSoon, setComingSoon]   = useState(null); // label of clicked gray node
-  const [dragOver, setDragOver]       = useState(false);
+  const [tooltip, setTooltip]           = useState(null); // { label, x, y } screen coords
+  const [comingSoon, setComingSoon]     = useState(null); // label of clicked gray node
+  const [dragOver, setDragOver]         = useState(false);
   const [cardsVisible, setCardsVisible] = useState(false);
   const fileInputRef = useRef(null);
   const cardsRef     = useRef(null);
@@ -442,7 +442,6 @@ export default function TaxonomyMenu() {
           {EDGES.map((e, i) => {
             const { cx: x1, cy: y1 } = POS[e.from];
             const { cx: x2, cy: y2 } = POS[e.to];
-            // connect from bottom of source to top of dest (approx)
             const srcH = Object.keys(NODE_INFO).includes(e.from) ? 52 : 44;
             const dstH = Object.keys(NODE_INFO).includes(e.to) ? 52 : 44;
             return (
@@ -499,7 +498,7 @@ export default function TaxonomyMenu() {
               {tooltip.label}
             </div>
             {NODE_INFO[tooltip.label].desc.map((line, i) => (
-              <div key={i} style={{ fontSize: 10, color: C.dim, lineHeight: 1.65, marginBottom: i < 2 ? 4 : 0 }}>
+              <div key={i} style={{ fontSize: 10, color: C.text, opacity: 0.7, lineHeight: 1.65, marginBottom: i < 2 ? 4 : 0 }}>
                 {line}
               </div>
             ))}
@@ -510,7 +509,7 @@ export default function TaxonomyMenu() {
         )}
       </div>
 
-      <p style={{ fontSize: 10.5, color: C.dimmer, marginTop: 12, marginBottom: 0, letterSpacing: "0.04em" }}>
+      <p style={{ fontSize: 10.5, color: C.dim, marginTop: 12, marginBottom: 0, letterSpacing: "0.04em" }}>
         Click a highlighted node to open its interactive visualizer · Hover for details
       </p>
 
@@ -616,14 +615,14 @@ export default function TaxonomyMenu() {
             >
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 {icon}
-                <span style={{ fontSize: 9, color: C.dimmer, fontWeight: 400 }}>
+                <span style={{ fontSize: 9, color: C.dim, fontWeight: 400 }}>
                   Step {step}
                 </span>
               </div>
               <div style={{ fontSize: 12, fontWeight: 700, color }}>
                 {title}
               </div>
-              <div style={{ fontSize: 10.5, color: C.dim, lineHeight: 1.7 }}>
+              <div style={{ fontSize: 10.5, color: C.text, lineHeight: 1.7, opacity: 0.75 }}>
                 {body}
               </div>
             </div>

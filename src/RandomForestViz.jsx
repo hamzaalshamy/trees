@@ -5,6 +5,7 @@ import { C } from "./theme";
 import GlobalHeader from "./GlobalHeader";
 import { heartData, heartMeta } from "./data/heartDisease";
 import { musicData, musicMeta } from "./data/musicData";
+import { salaryData, salaryMeta } from "./data/salary";
 import { predictRow } from "./cartAlgorithm";
 import TreeWorker from "./treeWorker.js?worker";
 
@@ -179,7 +180,7 @@ function Edge({ p1, p2, visible, label, onPath, sampleActive }) {
   const lx = x1 + (x2 - x1) * 0.38;
   const ly = y1 + (y2 - y1) * 0.38;
   const labelW = label.length * 5.6 + 10;
-  const textCol = highlighted ? PATH_COLOR : "#8aafc8";
+  const textCol = highlighted ? PATH_COLOR : C.muted;
   return (
     <g style={{ opacity: dimmed ? 0.15 : 1, transition: "opacity .3s" }}>
       <line x1={x1} y1={y1} x2={x2} y2={y2}
@@ -227,7 +228,7 @@ function TreeNode({ node, show, phase, pos, allClasses, onPath, sampleActive, is
             fontFamily="'JetBrains Mono',monospace" fontWeight={700}>{meanStr}</text>
           <text x={x} y={y + 3} textAnchor="middle" fill={C.dim} fontSize={7.5}
             fontFamily="'JetBrains Mono',monospace">n={node.samples}</text>
-          <text x={x} y={y + 16} textAnchor="middle" fill={C.dimmer} fontSize={7}
+          <text x={x} y={y + 16} textAnchor="middle" fill={C.dim} fontSize={7}
             fontFamily="'JetBrains Mono',monospace">{minStr}–{maxStr}</text>
         </g>
       );
@@ -307,41 +308,60 @@ function TreeNode({ node, show, phase, pos, allClasses, onPath, sampleActive, is
 const EMPTY_TS = { visibleIds: [], nodeId: null, phase: 0, stepIdx: -1 };
 
 // ─── Interaction hint tooltip (shown via ? button in header) ──────────────────
-function HintTooltip() {
+const ALGO_DESC = {
+  "decision-tree": [
+    "A single tree learned directly from data.",
+    "At each node, finds the feature + threshold that minimizes Gini impurity.",
+    "Fully interpretable — the foundation of all ensemble methods.",
+  ],
+  "bagging": [
+    "Bootstrap Aggregating — trains many trees independently in parallel.",
+    "Each tree is fit on a different bootstrap resample of the training data.",
+    "Averaging predictions reduces variance without increasing bias.",
+  ],
+  "random-forest": [
+    "Extends Bagging by also randomizing the feature set at each split.",
+    "Each split considers only √n candidate features — decorrelates the trees.",
+    "High accuracy, robust to overfitting, handles mixed feature types well.",
+  ],
+};
+
+function AlgoTooltip({ mode }) {
   const [pos, setPos] = useState(null);
   const btnRef = useRef(null);
+  const lines = ALGO_DESC[mode] ?? [];
   const show = () => {
     const r = btnRef.current?.getBoundingClientRect();
-    if (r) setPos({ left: r.left + r.width / 2, top: r.bottom + 6 });
+    if (r) setPos({ left: r.left + r.width / 2, top: r.bottom + 8 });
   };
   return (
-    <span style={{ display: "inline-block", marginLeft: 5, verticalAlign: "middle" }}>
+    <span style={{ display: "inline-flex", alignItems: "center", marginLeft: 8 }}>
       <span
         ref={btnRef}
         onMouseEnter={show}
         onMouseLeave={() => setPos(null)}
         style={{
-          cursor: "help", fontSize: 9, color: C.dimmer,
-          border: `1px solid ${C.dimmer}`, borderRadius: "50%",
-          width: 14, height: 14, display: "inline-flex",
+          cursor: "help", fontSize: 10, color: C.dimmer,
+          border: `1px solid ${C.border}`, borderRadius: "50%",
+          width: 16, height: 16, display: "inline-flex",
           alignItems: "center", justifyContent: "center",
           lineHeight: 1, userSelect: "none",
+          transition: "color 0.15s, border-color 0.15s",
         }}
+        onMouseEnterCapture={e => { e.currentTarget.style.color = C.dim; e.currentTarget.style.borderColor = C.dim; }}
+        onMouseLeaveCapture={e => { e.currentTarget.style.color = C.dimmer; e.currentTarget.style.borderColor = C.border; }}
       >?</span>
       {pos && (
         <div style={{
           position: "fixed", left: pos.left, top: pos.top,
           transform: "translateX(-50%)", zIndex: 1000,
-          background: "#1a2035", border: `1px solid ${C.border}`,
-          borderRadius: 8, padding: "10px 14px",
-          fontSize: 10, color: C.dim, lineHeight: 1.8,
-          whiteSpace: "nowrap", pointerEvents: "none",
-          boxShadow: "0 4px 20px rgba(0,0,0,0.55)",
+          background: "#141c2e", border: `1px solid rgba(255,255,255,0.08)`,
+          borderRadius: 10, padding: "12px 16px",
+          fontSize: 10.5, color: C.dim, lineHeight: 1.75,
+          maxWidth: 280, pointerEvents: "none",
+          boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
         }}>
-          <div>Scroll / pinch to <strong style={{ color: C.text }}>zoom</strong></div>
-          <div>Drag to <strong style={{ color: C.text }}>pan</strong></div>
-          <div><strong style={{ color: C.text }}>← →</strong> arrow keys to step</div>
-          <div>Double-click a tab to <strong style={{ color: C.text }}>instantly complete</strong></div>
+          {lines.map((l, i) => <div key={i}>{l}</div>)}
         </div>
       )}
     </span>
@@ -521,7 +541,7 @@ function DataModal({ modal, onUpdate, onConfirm, onCancel }) {
     const result = processCSVData(rawRows, headers, selectedTarget, naStrategy, sampleMode ?? rawRows.length, includedCols, taskType);
     if (!result) return;
     onConfirm(result.data, result.features, result.targetCol,
-              fileName.replace(".csv", ""), result.totalRows, result.sampledRows, result.classLabels, taskType);
+              fileName.replace(".csv", ""), result.totalRows, result.sampledRows, result.classLabels, taskType, selectedTarget);
   };
 
   const featureCols  = headers.filter(h => h !== selectedTarget);
@@ -1023,7 +1043,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
   const lockedMaxFeatures = (mode === "decision-tree" || mode === "bagging") ? "all" : null;
 
   // ── Dataset state ──────────────────────────────────────────────────────────
-  const [builtinDataset, setBuiltinDataset] = useState("heart"); // "heart" | "music"
+  const [builtinDataset, setBuiltinDataset] = useState("heart"); // "heart" | "music" | "salary"
   const [customDataset, setCustomDataset] = useState(null);
   const fileInputRef = useRef(null);
   const [csvModal, setCsvModal]           = useState(null);
@@ -1031,13 +1051,14 @@ export default function RandomForestViz({ mode = "random-forest" }) {
   const [selectedSampleIdx, setSelectedSampleIdx] = useState(null);
   const [oobTooltipVisible, setOobTooltipVisible] = useState(false);
 
-  const builtinMeta     = builtinDataset === "music" ? musicMeta : heartMeta;
-  const builtinData     = builtinDataset === "music" ? musicData : heartData;
+  const builtinMeta     = builtinDataset === "music" ? musicMeta : builtinDataset === "salary" ? salaryMeta : heartMeta;
+  const builtinData     = builtinDataset === "music" ? musicData : builtinDataset === "salary" ? salaryData : heartData;
+  const builtinTaskType = builtinDataset === "salary" ? "regression" : "classification";
   const activeData      = customDataset?.data        ?? builtinData;
   const activeFeatures  = customDataset?.features    ?? builtinMeta.features;
   const activeTargetCol = customDataset?.targetCol   ?? builtinMeta.targetCol;
   const classLabels     = customDataset?.classLabels ?? builtinMeta.targetLabels;
-  const activeTaskType  = customDataset?.taskType    ?? "classification";
+  const activeTaskType  = customDataset?.taskType    ?? builtinTaskType;
 
   // ── Hyperparameter state ───────────────────────────────────────────────────
   const [maxDepth, setMaxDepth]         = useState(3);
@@ -1057,11 +1078,15 @@ export default function RandomForestViz({ mode = "random-forest" }) {
   const cancelRef = useRef(false);
   const workerRef = useRef(null);
 
-  const [tabTooltip, setTabTooltip]         = useState(null); // { x, y }
-  const [dragRange, setDragRange]           = useState(null); // { start, end } | null
+  const [tabTooltip, setTabTooltip]           = useState(null); // { x, y }
+  const [dragRange, setDragRange]             = useState(null); // { start, end } | null
+  const [hintDismissed, setHintDismissed]     = useState(false);
+  const [scrollHint, setScrollHint]           = useState(false); // "Scroll down to predict ↓" hint
+  const [lockedParamTooltip, setLockedParamTooltip] = useState(null); // { key, x, y }
   const dragRef    = useRef({ active: false, startIdx: null, endIdx: null, moved: false });
   const tabRefs    = useRef([]);
   const tabScrollRef = useRef(null);
+  const predSectionRef = useRef(null);
 
   const [zoom, setZoom]                     = useState(1);
   const [pan, setPan]                       = useState({ x: 0, y: 0 });
@@ -1095,6 +1120,37 @@ export default function RandomForestViz({ mode = "random-forest" }) {
       @keyframes taxFadeIn {
         from { opacity: 0; }
         to   { opacity: 1; }
+      }
+      @keyframes fadeInUp {
+        from { opacity: 0; transform: translateX(-50%) translateY(4px); }
+        to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+      }
+      select.ds-pill {
+        -webkit-appearance: none; appearance: none;
+        background: rgba(255,255,255,0.05);
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 20px;
+        color: #e2e8f0;
+        font-family: inherit;
+        font-size: 12px;
+        font-weight: 500;
+        padding: 5px 28px 5px 12px;
+        cursor: pointer;
+        outline: none;
+        transition: box-shadow 0.2s ease, border-color 0.2s ease;
+        min-width: 0;
+      }
+      select.ds-pill:hover {
+        border-color: rgba(255,255,255,0.2);
+        box-shadow: 0 0 0 3px rgba(245,158,11,0.12);
+      }
+      select.ds-pill:focus {
+        border-color: rgba(245,158,11,0.4);
+        box-shadow: 0 0 0 3px rgba(245,158,11,0.12);
+      }
+      select.ds-pill option {
+        background: #111827;
+        color: #e2e8f0;
       }
     `;
     document.head.appendChild(s);
@@ -1134,6 +1190,8 @@ export default function RandomForestViz({ mode = "random-forest" }) {
     setTreeStates({});
     setZoom(1);
     setBuildProgress({ done: 0, total: nEstimators });
+    setHintDismissed(false);
+    setSelectedSampleIdx(null);
 
     const worker = new TreeWorker();
     workerRef.current = worker;
@@ -1170,9 +1228,10 @@ export default function RandomForestViz({ mode = "random-forest" }) {
     setBuiltinDataset(key);
     setCustomDataset(null);
     setSelectedSampleIdx(null);
-    const d = key === "music" ? musicData : heartData;
-    const m = key === "music" ? musicMeta : heartMeta;
-    buildForestWithData(d, m.features, m.targetCol, "classification");
+    const d = key === "music" ? musicData : key === "salary" ? salaryData : heartData;
+    const m = key === "music" ? musicMeta : key === "salary" ? salaryMeta : heartMeta;
+    const t = key === "salary" ? "regression" : "classification";
+    buildForestWithData(d, m.features, m.targetCol, t);
   }, [buildForestWithData]);
 
   useEffect(() => {
@@ -1288,9 +1347,11 @@ export default function RandomForestViz({ mode = "random-forest" }) {
       if (growing || buildProgress) return;
       if (e.key === "ArrowRight" || e.key === "ArrowDown") {
         e.preventDefault();
+        setHintDismissed(true);
         goToStep(curTree, getTS(curTree).stepIdx + 1);
       } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
         e.preventDefault();
+        setHintDismissed(true);
         goToStep(curTree, getTS(curTree).stepIdx - 1);
       }
     };
@@ -1358,6 +1419,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
       dragRef.current = { active: false, startIdx: null, endIdx: null, moved: false };
       setDragRange(null);
       if (moved && startIdx !== null && endIdx !== null) {
+        setHintDismissed(true);
         const lo = Math.min(startIdx, endIdx);
         const hi = Math.max(startIdx, endIdx);
         for (let j = lo; j <= hi; j++) {
@@ -1368,6 +1430,37 @@ export default function RandomForestViz({ mode = "random-forest" }) {
     window.addEventListener("mouseup", onMouseUp);
     return () => window.removeEventListener("mouseup", onMouseUp);
   }, [instantComplete]);
+
+  // ── Auto-advance to step 0 when first tree arrives ────────────────────────
+  // Shows the root node with '?' immediately so the canvas is never empty.
+  useEffect(() => {
+    if (trees[0] && !treeStates[0]) {
+      goToStep(0, 0);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trees[0]]);
+
+  // ── Scroll-down hint — appears when all trees done, fades after 5s or scroll ─
+  useEffect(() => {
+    const allDone = trees.length > 0 && !growing && !buildProgress &&
+      trees.every((t, i) => {
+        if (!t) return false;
+        const s = treeStates[i];
+        const steps = getSteps(i);
+        return s && s.stepIdx >= steps.length - 1 && steps.length > 0;
+      });
+    if (!allDone) { setScrollHint(false); return; }
+    setScrollHint(true);
+    const timer = setTimeout(() => setScrollHint(false), 5000);
+    const el = predSectionRef.current;
+    if (!el) return () => clearTimeout(timer);
+    const obs = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) { setScrollHint(false); clearTimeout(timer); }
+    }, { threshold: 0.1 });
+    obs.observe(el);
+    return () => { clearTimeout(timer); obs.disconnect(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trees, treeStates, growing, buildProgress]);
 
   // ── File drop handling ─────────────────────────────────────────────────────
   const openFile = useCallback((file) => {
@@ -1398,8 +1491,8 @@ export default function RandomForestViz({ mode = "random-forest" }) {
   }, [openFile]);
 
   // ── CSV modal confirm ──────────────────────────────────────────────────────
-  const handleDataConfirm = useCallback((data, features, targetCol, name, totalRows, sampledRows, classLabels, taskType = "classification") => {
-    setCustomDataset({ data, features, targetCol, name, totalRows, sampledRows, classLabels, taskType });
+  const handleDataConfirm = useCallback((data, features, targetCol, name, totalRows, sampledRows, classLabels, taskType = "classification", originalTarget = null) => {
+    setCustomDataset({ data, features, targetCol, name, totalRows, sampledRows, classLabels, taskType, originalTarget });
     setSelectedSampleIdx(null);
     setCsvModal(null);
     buildForestWithData(data, features, targetCol, taskType);
@@ -1597,63 +1690,105 @@ export default function RandomForestViz({ mode = "random-forest" }) {
 
       {/* Global Header */}
       <GlobalHeader
-        breadcrumb={[
-          { label: "Trees", route: "/" },
-          { label: mode === "decision-tree" ? "Decision Tree" : mode === "bagging" ? "Bagging" : "Random Forest" },
-        ]}
-        description={
-          <span>
-            {mode === "decision-tree"
-              ? "no ensemble · no feature subsampling"
-              : mode === "bagging"
-              ? "bootstrap ensemble · all features at each split"
-              : "bootstrap ensemble · random feature subsets"}
-            <HintTooltip />
-          </span>
-        }
         right={
           <button
             onClick={() => fileInputRef.current?.click()}
-            title="Upload a CSV file to use as your dataset"
-            onMouseEnter={e => { e.currentTarget.style.color = C.accent; }}
+            title="Upload a CSV file"
+            onMouseEnter={e => { e.currentTarget.style.color = C.text; }}
             onMouseLeave={e => { e.currentTarget.style.color = C.dim; }}
             style={{
               background: "none", border: "none", cursor: "pointer",
-              fontSize: 11, color: C.dim,
-              fontWeight: 600, padding: 0, transition: "color 0.15s",
+              fontSize: 12, color: C.dim, fontWeight: 500,
+              padding: 0, transition: "color 0.15s", fontFamily: "inherit",
             }}
           >
             ↑ Upload CSV
           </button>
         }
-        detail={
-          <div style={{ display: "flex", alignItems: "center", gap: 10, width: "100%" }}>
-            <label style={{
-              fontSize: 9, color: C.dimmer,
-              flexShrink: 0, whiteSpace: "nowrap",
-            }}>Dataset</label>
-            <select
-              value={customDataset ? "custom" : builtinDataset}
-              disabled={!!buildProgress || growing}
-              onChange={e => {
-                const val = e.target.value;
-                if (val === "upload") { fileInputRef.current?.click(); return; }
-                if (val === "custom") return;
-                switchToBuiltin(val);
-              }}
-              style={{
-                ...inp, fontSize: 10, padding: "1px 6px", cursor: (buildProgress || growing) ? "default" : "pointer",
-                flex: 1, maxWidth: 340, height: 22,
-                opacity: (buildProgress || growing) ? 0.5 : 1,
-              }}
-            >
-              <option value="heart">Heart Disease (binary, {heartData.length} samples)</option>
-              <option value="music">Music Genres (10 classes, {musicData.length} samples)</option>
-              {customDataset && <option value="custom">Custom: {customDataset.name}</option>}
-              <option value="upload">Upload your own CSV…</option>
-            </select>
-          </div>
-        }
+        infoBar={(() => {
+          const algoLabel   = mode === "decision-tree" ? "Decision Tree" : mode === "bagging" ? "Bagging" : "Random Forest";
+          const targetDisp  = customDataset?.originalTarget
+            ?? (builtinDataset === "music" ? "genre" : builtinDataset === "salary" ? "Salary" : "Disease");
+          const nClasses    = Array.isArray(classLabels) ? classLabels.length : Object.keys(classLabels ?? {}).length;
+          const taskTag     = activeTaskType === "regression"
+            ? "Regression"
+            : nClasses === 2 ? "Binary" : `${nClasses}-class`;
+          const sampleCount = activeData.length;
+          const disabled    = !!buildProgress || growing;
+
+          const Badge = ({ children }) => (
+            <span style={{
+              display: "inline-flex", alignItems: "center",
+              background: "rgba(255,255,255,0.07)",
+              borderRadius: 6, padding: "4px 10px",
+              fontSize: 11, whiteSpace: "nowrap",
+            }}>
+              {children}
+            </span>
+          );
+
+          return (
+            <>
+              {/* Left: algorithm name + description tooltip */}
+              <div style={{ display: "flex", alignItems: "center", gap: 0 }}>
+                <span style={{
+                  fontSize: 18, fontWeight: 700, color: C.text,
+                  letterSpacing: "-0.3px", lineHeight: 1,
+                }}>
+                  {algoLabel}
+                </span>
+                <AlgoTooltip mode={mode} />
+              </div>
+
+              {/* Right: dataset pill + stat badges */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                {/* Dataset label + dropdown pill, inline */}
+                <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                  <span style={{ fontSize: 9, color: C.muted, letterSpacing: "0.04em", whiteSpace: "nowrap" }}>
+                    Dataset
+                  </span>
+                  <div style={{ position: "relative", display: "inline-flex", alignItems: "center" }}>
+                    <select
+                      className="ds-pill"
+                      value={customDataset ? "custom" : builtinDataset}
+                      disabled={disabled}
+                      onChange={e => {
+                        const val = e.target.value;
+                        if (val === "upload") { fileInputRef.current?.click(); return; }
+                        if (val === "custom") return;
+                        switchToBuiltin(val);
+                      }}
+                      style={{ opacity: disabled ? 0.45 : 1, cursor: disabled ? "default" : "pointer" }}
+                    >
+                      <option value="heart">Built-in: Heart Disease (Binary classification)</option>
+                      <option value="music">Built-in: Music Genres (Multiclass classification)</option>
+                      <option value="salary">Built-in: Salary (Regression)</option>
+                      {customDataset && <option value="custom">{customDataset.name}</option>}
+                      <option value="upload">Upload CSV…</option>
+                    </select>
+                    {/* Chevron overlay */}
+                    <span style={{
+                      position: "absolute", right: 9, top: "50%",
+                      transform: "translateY(-50%)",
+                      pointerEvents: "none", color: C.dimmer, fontSize: 10, lineHeight: 1,
+                    }}>▾</span>
+                  </div>
+                </div>
+
+                {/* Stat badges */}
+                <Badge>
+                  <span style={{ color: C.dim, marginRight: 4 }}>Target</span>
+                  <span style={{ color: C.text, fontWeight: 600 }}>{targetDisp}</span>
+                </Badge>
+                <Badge><span style={{ color: C.text, fontWeight: 600 }}>{taskTag}</span></Badge>
+                <Badge>
+                  <span style={{ color: C.text, fontWeight: 600 }}>{sampleCount.toLocaleString()}</span>
+                  <span style={{ color: C.dim, marginLeft: 4 }}>samples</span>
+                </Badge>
+              </div>
+            </>
+          );
+        })()}
       />
 
       {/* Controls toolbar */}
@@ -1663,12 +1798,13 @@ export default function RandomForestViz({ mode = "random-forest" }) {
         background: C.panel,
         boxShadow: "0 1px 0 rgba(255,255,255,0.03), 0 4px 20px rgba(0,0,0,0.35)",
         flexWrap: "wrap",
-        position: "relative", zIndex: 5,
+        position: "relative", zIndex: 20,
       }}>
         {/* Model hyperparameters */}
         <div style={{ display: "flex", alignItems: "flex-end", gap: 12, flex: 1, flexWrap: "wrap" }}>
+          {/* Max depth — always unlocked */}
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <label style={{ fontSize: 9, color: C.dim, fontWeight: 400 }}>Max depth</label>
+            <label style={{ fontSize: 9, color: C.muted, fontWeight: 400 }}>Max depth</label>
             <input type="number" min={1} max={activeFeatures.length} value={maxDepthStr} disabled={growing}
               onChange={e => setMaxDepthStr(e.target.value)}
               onBlur={() => {
@@ -1677,9 +1813,46 @@ export default function RandomForestViz({ mode = "random-forest" }) {
               }}
               style={{ ...inp, width: 58 }} />
           </div>
-          {!lockedMaxFeatures && (
+
+          {/* Max features — locked on decision-tree and bagging */}
+          {lockedMaxFeatures ? (
+            // Outer wrapper: handles hover + positioning. No opacity here so tooltip is unaffected.
+            <div
+              style={{ position: "relative", cursor: "default" }}
+              onMouseEnter={() => setLockedParamTooltip("maxFeatures")}
+              onMouseLeave={() => setLockedParamTooltip(null)}
+            >
+              {/* Dimmed control content */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, opacity: 0.45, pointerEvents: "none", userSelect: "none" }}>
+                <label style={{ fontSize: 9, color: C.muted, fontWeight: 400, display: "flex", alignItems: "center", gap: 4 }}>
+                  Max features <span style={{ fontSize: 9, lineHeight: 1 }}>🔒</span>
+                </label>
+                <select value="all" disabled style={{ ...inp, cursor: "not-allowed", width: "auto" }}>
+                  <option value="all">p (all) → {activeFeatures.length}</option>
+                </select>
+              </div>
+              {/* Tooltip — sibling of dimmed content, inherits full opacity */}
+              {lockedParamTooltip === "maxFeatures" && (
+                <div style={{
+                  position: "absolute", bottom: "calc(100% + 10px)", left: "50%",
+                  transform: "translateX(-50%)",
+                  width: 240, padding: "10px 13px", borderRadius: 10,
+                  background: "#1a2235",
+                  boxShadow: "0 8px 32px rgba(0,0,0,0.7), inset 0 0 0 1px rgba(255,255,255,0.12)",
+                  fontSize: 10.5, color: C.text, lineHeight: 1.65,
+                  fontWeight: 400, zIndex: 1000, pointerEvents: "none",
+                  animation: "fadeInUp 0.14s ease-out",
+                  whiteSpace: "normal",
+                }}>
+                  {mode === "decision-tree"
+                    ? "A decision tree evaluates all features at each split — switch to Random Forest for feature subsampling"
+                    : "Bagging typically considers all features at each split — switch to Random Forest to enable feature subsampling"}
+                </div>
+              )}
+            </div>
+          ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <label style={{ fontSize: 9, color: C.dim, fontWeight: 400 }}>Max features</label>
+              <label style={{ fontSize: 9, color: C.muted, fontWeight: 400 }}>Max features</label>
               <select value={featureSubset} disabled={growing} onChange={e => setFeatureSubset(e.target.value)} style={{ ...inp, cursor: "pointer" }}>
                 {Object.entries(FEATURE_SUBSET_OPTIONS).map(([k, v]) => (
                   <option key={k} value={k}>{v.label} → {v.fn(activeFeatures.length)}</option>
@@ -1687,9 +1860,42 @@ export default function RandomForestViz({ mode = "random-forest" }) {
               </select>
             </div>
           )}
-          {!lockedNEstimators && (
+
+          {/* Trees — locked on decision-tree */}
+          {lockedNEstimators ? (
+            // Outer wrapper: handles hover + positioning. No opacity here so tooltip is unaffected.
+            <div
+              style={{ position: "relative", cursor: "default" }}
+              onMouseEnter={() => setLockedParamTooltip("trees")}
+              onMouseLeave={() => setLockedParamTooltip(null)}
+            >
+              {/* Dimmed control content */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, opacity: 0.45, pointerEvents: "none", userSelect: "none" }}>
+                <label style={{ fontSize: 9, color: C.muted, fontWeight: 400, display: "flex", alignItems: "center", gap: 4 }}>
+                  Trees <span style={{ fontSize: 9, lineHeight: 1 }}>🔒</span>
+                </label>
+                <input type="number" value={1} disabled style={{ ...inp, width: 58, cursor: "not-allowed" }} />
+              </div>
+              {/* Tooltip — sibling of dimmed content, inherits full opacity */}
+              {lockedParamTooltip === "trees" && (
+                <div style={{
+                  position: "absolute", bottom: "calc(100% + 10px)", left: "50%",
+                  transform: "translateX(-50%)",
+                  width: 240, padding: "10px 13px", borderRadius: 10,
+                  background: "#1a2235",
+                  boxShadow: "0 8px 32px rgba(0,0,0,0.7), inset 0 0 0 1px rgba(255,255,255,0.12)",
+                  fontSize: 10.5, color: C.text, lineHeight: 1.65,
+                  fontWeight: 400, zIndex: 1000, pointerEvents: "none",
+                  animation: "fadeInUp 0.14s ease-out",
+                  whiteSpace: "normal",
+                }}>
+                  A decision tree is a single model — switch to an ensemble
+                </div>
+              )}
+            </div>
+          ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <label style={{ fontSize: 9, color: C.dim, fontWeight: 400 }}>Trees</label>
+              <label style={{ fontSize: 9, color: C.muted, fontWeight: 400 }}>Trees</label>
               <input type="number" min={1} max={100} value={nEstimatorsStr} disabled={growing}
                 onChange={e => setNEstimatorsStr(e.target.value)}
                 onBlur={() => {
@@ -1699,8 +1905,10 @@ export default function RandomForestViz({ mode = "random-forest" }) {
                 style={{ ...inp, width: 58 }} />
             </div>
           )}
+
+          {/* Speed — always unlocked */}
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <label style={{ fontSize: 9, color: C.dim, fontWeight: 400 }}>Speed</label>
+            <label style={{ fontSize: 9, color: C.muted, fontWeight: 400 }}>Speed</label>
             <select value={speed} onChange={e => setSpeed(+e.target.value)} style={{ ...inp, cursor: "pointer", width: 64 }}>
               {[0.5, 1, 2, 4].map(s => <option key={s} value={s}>{s}×</option>)}
             </select>
@@ -1725,7 +1933,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
               onClick={() => {
                 if (buildProgress) return;
                 if (growing) { cancelRef.current = true; growRef.current = false; setGrowing(false); }
-                else autoGrowAll();
+                else { setHintDismissed(true); autoGrowAll(); }
               }}
               onMouseEnter={e => { if (!buildProgress) e.currentTarget.style.transform = "scale(1.03)"; }}
               onMouseLeave={e => { e.currentTarget.style.transform = "scale(1)"; }}
@@ -1744,7 +1952,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
               {buildProgress ? "Building…" : growing ? "■ Stop" : "▶ Grow"}
             </button>
             {!growing && !buildProgress && (
-              <div style={{ fontSize: 8.5, color: C.dim }}>
+              <div style={{ fontSize: 8.5, color: C.muted }}>
                 or use ← → arrow keys
               </div>
             )}
@@ -1811,7 +2019,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
                         if (!growing && !buildProgress && t && !dragRef.current.moved) setCurTree(i);
                       }}
                       onDoubleClick={() => {
-                        if (!growing && !buildProgress && t) { setCurTree(i); instantComplete(i); }
+                        if (!growing && !buildProgress && t) { setHintDismissed(true); setCurTree(i); instantComplete(i); }
                       }}
                       onMouseDown={e => {
                         if (loading || !t || growing || buildProgress) return;
@@ -1880,17 +2088,17 @@ export default function RandomForestViz({ mode = "random-forest" }) {
           )}
 
           {/* Step controls */}
-          <button disabled={growing || !!buildProgress || ts.stepIdx <= -1} onClick={() => goToStep(curTree, ts.stepIdx - 1)}
+          <button disabled={growing || !!buildProgress || ts.stepIdx <= -1} onClick={() => { setHintDismissed(true); goToStep(curTree, ts.stepIdx - 1); }}
             style={{ ...inp, cursor: (growing || buildProgress || ts.stepIdx <= -1) ? "default" : "pointer", padding: "3px 10px", opacity: (growing || buildProgress || ts.stepIdx <= -1) ? 0.3 : 1, fontSize: 11 }}>◀</button>
-          <span style={{ fontSize: 10, color: C.dim, minWidth: 72, textAlign: "center", userSelect: "none" }}>
+          <span style={{ fontSize: 10, color: C.muted, minWidth: 72, textAlign: "center", userSelect: "none" }}>
             {ts.stepIdx === -1 ? "ready" : `${ts.stepIdx + 1} / ${totalSteps}`}
           </span>
-          <button disabled={growing || !!buildProgress || ts.stepIdx >= totalSteps - 1} onClick={() => goToStep(curTree, ts.stepIdx + 1)}
+          <button disabled={growing || !!buildProgress || ts.stepIdx >= totalSteps - 1} onClick={() => { setHintDismissed(true); goToStep(curTree, ts.stepIdx + 1); }}
             style={{ ...inp, cursor: (growing || buildProgress || ts.stepIdx >= totalSteps - 1) ? "default" : "pointer", padding: "3px 10px", opacity: (growing || buildProgress || ts.stepIdx >= totalSteps - 1) ? 0.3 : 1, fontSize: 11 }}>▶</button>
 
           {/* Bootstrap info */}
           {curBootstrap && (
-            <span style={{ fontSize: 9, color: C.dim, whiteSpace: "nowrap" }}>
+            <span style={{ fontSize: 9, color: C.muted, whiteSpace: "nowrap" }}>
               {curBootstrap.inBag}/{TOTAL_SAMPLES} in-bag · {curBootstrap.oob} OOB
               {curBootstrap.oobAccuracy > 0 ? ` · acc=${curBootstrap.oobAccuracy}` : ""}
             </span>
@@ -1910,10 +2118,10 @@ export default function RandomForestViz({ mode = "random-forest" }) {
         alignItems: "center",
         gap: 12,
       }}>
-        <span style={{
-          fontSize: 11, fontWeight: 700, color: C.accent,
-          letterSpacing: "0.06em", flexShrink: 0,
-        }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: C.accent, letterSpacing: "0.06em", flexShrink: 0 }}>
+          Step 1
+        </span>
+        <span style={{ fontSize: 11, fontWeight: 700, color: C.text, letterSpacing: "0.04em", flexShrink: 0 }}>
           Training
         </span>
         <div style={{ flex: 1, height: 1, background: `linear-gradient(to right, ${C.accent}40, transparent)` }} />
@@ -1930,21 +2138,29 @@ export default function RandomForestViz({ mode = "random-forest" }) {
           position: "relative",
         }}>
 
-        {/* Empty state placeholder */}
-        {!currentNode && (
+        {/* Welcome overlay — shown on step 0, dismissed on first action or when any tree completes */}
+        {!hintDismissed && completedTrees.length === 0 && !growing && !buildProgress && trees[0] && (
           <div style={{
             position: "absolute", inset: 0, display: "flex", flexDirection: "column",
             alignItems: "center", justifyContent: "center", pointerEvents: "none",
+            zIndex: 5,
           }}>
-            <svg width="48" height="44" viewBox="0 0 48 44" fill="none" opacity={0.3}>
-              <circle cx="24" cy="10" r="8" stroke={C.dim} strokeWidth="1.5" />
-              <circle cx="10" cy="33" r="7" stroke={C.dim} strokeWidth="1.5" />
-              <circle cx="38" cy="33" r="7" stroke={C.dim} strokeWidth="1.5" />
-              <line x1="24" y1="18" x2="13" y2="26" stroke={C.dim} strokeWidth="1.3" />
-              <line x1="24" y1="18" x2="35" y2="26" stroke={C.dim} strokeWidth="1.3" />
-            </svg>
-            <div style={{ fontSize: 11, color: C.dimmer, marginTop: 14, textAlign: "center", lineHeight: 1.7 }}>
-              Press <span style={{ color: C.dim }}>▶ Grow</span> or use <span style={{ color: C.dim }}>→</span> arrow key to start building the tree
+            <div style={{
+              background: "rgba(10,14,23,0.82)",
+              border: `1px solid rgba(255,255,255,0.08)`,
+              borderRadius: 16,
+              padding: "22px 32px",
+              maxWidth: 420, textAlign: "center",
+              backdropFilter: "blur(6px)",
+              boxShadow: "0 8px 40px rgba(0,0,0,0.6)",
+            }}>
+              <div style={{ fontSize: 13, color: C.text, fontWeight: 600, marginBottom: 10, lineHeight: 1.5 }}>
+                Use <span style={{ color: C.accent, fontWeight: 700 }}>→</span> to step through the tree,
+                or press <span style={{ color: C.accent, fontWeight: 700 }}>▶ Grow</span> to watch it build automatically.
+              </div>
+              <div style={{ fontSize: 10.5, color: C.dim, lineHeight: 1.7 }}>
+                You can also change the dataset above to visualize on your own data.
+              </div>
             </div>
           </div>
         )}
@@ -2049,10 +2265,10 @@ export default function RandomForestViz({ mode = "random-forest" }) {
               && currentNode?.globalBestIdx !== currentNode?.featureIndex;
             return (
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
-                <span style={{ fontSize: 9, color: C.dim, fontWeight: 400 }}>Feature pool</span>
-                <span style={{ fontSize: 8.5, color: C.dimmer }}>
-                  <span style={{ color: C.dimmer }}>● not sampled</span>{"  "}
-                  <span style={{ color: `${C.accent}99` }}>● candidate</span>{"  "}
+                <span style={{ fontSize: 9, color: C.muted, fontWeight: 400 }}>Feature pool</span>
+                <span style={{ fontSize: 8.5 }}>
+                  <span style={{ color: C.dim }}>● not sampled</span>{"  "}
+                  <span style={{ color: `${C.accent}bb` }}>● candidate</span>{"  "}
                   <span style={{ color: C.green }}>● chosen</span>{"  "}
                   <span style={{ color: C.leafB }}>● true best</span>
                 </span>
@@ -2081,12 +2297,12 @@ export default function RandomForestViz({ mode = "random-forest" }) {
             } else if (ts.phase >= 1 && isCand) {
               bg = `${C.accent}12`; col = `${C.accent}bb`;
             } else {
-              bg = "rgba(255,255,255,0.03)"; col = C.dimmer;
+              bg = "rgba(255,255,255,0.03)"; col = C.dim;
             }
             const giniCol = (ts.phase >= 2 && isBest)       ? C.green
                           : (ts.phase >= 2 && isGlobalBest)  ? C.leafB
-                          : (ts.phase >= 1 && isCand)        ? `${C.accent}99`
-                          : C.dimmer;
+                          : (ts.phase >= 1 && isCand)        ? `${C.accent}bb`
+                          : C.dim;
             return (
               <div key={i} style={{
                 padding: "5px 11px", borderRadius: 10, fontSize: 10, fontFamily: "'JetBrains Mono',monospace",
@@ -2112,7 +2328,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
 
       {/* Calculations panel */}
       <div style={{ padding: "6px 16px 10px" }}>
-        <div style={{ fontSize: 9, color: C.dim, fontWeight: 400, marginBottom: 6 }}>Calculations</div>
+        <div style={{ fontSize: 9, color: C.muted, fontWeight: 500, marginBottom: 6 }}>Calculations</div>
         <div style={{
           background: "#0c1018", borderRadius: 12,
           boxShadow: "0 2px 16px rgba(0,0,0,0.35), inset 0 0 0 1px rgba(255,255,255,0.04)",
@@ -2121,8 +2337,8 @@ export default function RandomForestViz({ mode = "random-forest" }) {
 
           {/* Empty state */}
           {!currentNode && (
-            <div style={{ padding: "18px 16px", color: C.dimmer, fontSize: 10.5 }}>
-              Press <span style={{ color: C.dim }}>▶ Grow</span> or use <span style={{ color: C.dim }}>→</span> to begin…
+            <div style={{ padding: "18px 16px", color: C.dim, fontSize: 10.5 }}>
+              Press <span style={{ color: C.muted }}>▶ Grow</span> or use <span style={{ color: C.muted }}>→</span> to begin…
             </div>
           )}
 
@@ -2133,29 +2349,29 @@ export default function RandomForestViz({ mode = "random-forest" }) {
             if (currentNode.mean !== undefined) {
               return (
                 <div style={{ padding: "16px 16px" }}>
-                  <div style={{ fontSize: 9, color: C.dim, marginBottom: 10 }}>Leaf node · Prediction</div>
+                  <div style={{ fontSize: 9, color: C.muted, marginBottom: 10 }}>Leaf node · Prediction</div>
                   <div style={{ display: "flex", gap: 20, flexWrap: "wrap", marginBottom: 12 }}>
                     <div>
-                      <div style={{ fontSize: 9, color: C.dim, marginBottom: 2 }}>Mean</div>
+                      <div style={{ fontSize: 9, color: C.muted, marginBottom: 2 }}>Mean</div>
                       <div style={{ fontSize: 15, fontWeight: 700, color: C.blue, fontFamily: "'JetBrains Mono',monospace" }}>
                         {formatRegVal(currentNode.mean)}
                       </div>
                     </div>
                     <div>
-                      <div style={{ fontSize: 9, color: C.dim, marginBottom: 2 }}>Variance</div>
+                      <div style={{ fontSize: 9, color: C.muted, marginBottom: 2 }}>Variance</div>
                       <div style={{ fontSize: 12, color: C.text, fontFamily: "'JetBrains Mono',monospace" }}>
                         {currentNode.variance.toFixed(3)}
                       </div>
                     </div>
                     <div>
-                      <div style={{ fontSize: 9, color: C.dim, marginBottom: 2 }}>n</div>
+                      <div style={{ fontSize: 9, color: C.muted, marginBottom: 2 }}>n</div>
                       <div style={{ fontSize: 12, color: C.text, fontFamily: "'JetBrains Mono',monospace" }}>
                         {currentNode.samples}
                       </div>
                     </div>
                   </div>
-                  <div style={{ fontSize: 9, color: C.dimmer }}>
-                    Range: <span style={{ color: C.dim }}>{formatRegVal(currentNode.min)} – {formatRegVal(currentNode.max)}</span>
+                  <div style={{ fontSize: 9, color: C.muted }}>
+                    Range: <span style={{ color: C.text }}>{formatRegVal(currentNode.min)} – {formatRegVal(currentNode.max)}</span>
                   </div>
                 </div>
               );
@@ -2176,14 +2392,14 @@ export default function RandomForestViz({ mode = "random-forest" }) {
             return (
               <div style={{ padding: "16px 16px" }}>
                 <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 12 }}>
-                  <span style={{ fontSize: 9, color: C.dim }}>Leaf node · Prediction</span>
+                  <span style={{ fontSize: 9, color: C.muted }}>Leaf node · Prediction</span>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
                   <div style={{
                     fontSize: 15, fontWeight: 700, color: predColor,
                     fontFamily: "'JetBrains Mono',monospace",
                   }}>{currentNode.prediction}</div>
-                  <div style={{ fontSize: 9, color: C.dim }}>
+                  <div style={{ fontSize: 9, color: C.muted }}>
                     Gini <span style={{ color: C.text, fontFamily: "'JetBrains Mono',monospace" }}>{currentNode.impurity.toFixed(4)}</span>
                     <span style={{ marginLeft: 8 }}>n = <span style={{ color: C.text, fontFamily: "'JetBrains Mono',monospace" }}>{currentNode.samples}</span></span>
                   </div>
@@ -2259,7 +2475,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
                   borderTop: "1px solid rgba(255,255,255,0.05)",
                   padding: "12px 16px",
                 }}>
-                  <div style={{ fontSize: 9, color: C.dim, marginBottom: 8 }}>{activeTaskType === "regression" ? "MSE" : "Gini"} per candidate <span style={{ color: C.dimmer }}>(shorter = better)</span></div>
+                  <div style={{ fontSize: 9, color: C.dim, marginBottom: 8 }}>{activeTaskType === "regression" ? "MSE" : "Gini"} per candidate <span style={{ color: C.muted }}>(shorter = better)</span></div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
                     {candidateEvals.map((ev, j) => {
                       const isChosen = ts.phase >= 2 && ev.featureIndex === currentNode.featureIndex;
@@ -2348,7 +2564,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
                     <span style={{ fontSize: 11, color: C.dim, fontFamily: "'JetBrains Mono',monospace" }}>
                       ≤ {currentNode.threshold}
                     </span>
-                    <span style={{ fontSize: 9, color: C.dimmer, marginLeft: 4 }}>
+                    <span style={{ fontSize: 9, color: C.muted, marginLeft: 4 }}>
                       {activeTaskType === "regression" ? "MSE" : "G"}={currentNode.gini.toFixed(4)}
                     </span>
                   </div>
@@ -2357,45 +2573,74 @@ export default function RandomForestViz({ mode = "random-forest" }) {
             </>);
           })()}
         </div>
+
+        {/* ↓ Back to prediction — appears when a sample is selected */}
+        {selectedSample && (
+          <button
+            onClick={() => predSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+            style={{
+              position: "absolute", bottom: 10, right: 10,
+              padding: "5px 13px", borderRadius: 20,
+              background: "rgba(10,14,23,0.78)", backdropFilter: "blur(6px)",
+              border: `1px solid rgba(255,255,255,0.1)`,
+              color: C.muted, fontSize: 10, fontWeight: 600,
+              cursor: "pointer", fontFamily: "inherit",
+              boxShadow: "0 2px 12px rgba(0,0,0,0.4)",
+              transition: "color 0.15s, border-color 0.15s",
+              zIndex: 6,
+            }}
+            onMouseEnter={e => { e.currentTarget.style.color = C.text; e.currentTarget.style.borderColor = "rgba(255,255,255,0.22)"; }}
+            onMouseLeave={e => { e.currentTarget.style.color = C.muted; e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; }}
+          >
+            ↓ Back to prediction
+          </button>
+        )}
       </div>
 
-      {/* ── Prediction section break — always visible ────────────────────────── */}
-      {/* Gradient separator */}
-      <div style={{ padding: "20px 20px 0" }}>
+      {/* ── Scroll-down hint — fades in when all trees done ─────────────────── */}
+      <div style={{
+        height: 32, display: "flex", alignItems: "center", justifyContent: "center",
+        opacity: scrollHint ? 1 : 0,
+        transition: "opacity 0.6s ease",
+        pointerEvents: "none",
+      }}>
+        <span style={{ fontSize: 10, color: C.accent, fontWeight: 600, letterSpacing: "0.05em" }}>
+          Scroll down to predict ↓
+        </span>
+      </div>
+
+      {/* ── Section gap ──────────────────────────────────────────────────────── */}
+      <div style={{ height: 24 }} />
+
+      {/* ── Prediction section break ─────────────────────────────────────────── */}
+      <div ref={predSectionRef} style={{ padding: "0 20px" }}>
         <div style={{
           height: 1,
-          background: `linear-gradient(to right, transparent, ${C.accent}28 25%, ${PATH_COLOR}22 75%, transparent)`,
+          background: `linear-gradient(to right, transparent, ${PATH_COLOR}40 25%, ${PATH_COLOR}28 75%, transparent)`,
         }} />
       </div>
 
-      {/* Sticky Prediction header */}
+      {/* ── Prediction section header (sticky) ───────────────────────────────── */}
       <div style={{
         position: "sticky",
         top: 0,
         zIndex: 8,
         background: C.bg,
-        padding: "10px 20px 6px",
+        padding: "10px 20px 8px",
         boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
         display: "flex",
-        flexDirection: "column",
-        gap: 3,
+        alignItems: "center",
+        gap: 12,
       }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{
-            fontSize: 11, fontWeight: 700, color: PATH_COLOR,
-            letterSpacing: "0.06em", flexShrink: 0,
-          }}>
-            Prediction
-          </span>
-          <div style={{ flex: 1, height: 1, background: `linear-gradient(to right, ${PATH_COLOR}40, transparent)` }} />
-          <span style={{ fontSize: 9, color: C.dimmer, flexShrink: 0 }}>
-            {completedTrees.length}/{nEstimators} trees ready
-          </span>
-        </div>
-        <span style={{ fontSize: 10, color: C.dimmer }}>
-          {activeTaskType === "regression"
-            ? "Select a sample and see the ensemble's numeric prediction."
-            : "Select a sample and watch each tree in the forest vote on it."}
+        <span style={{ fontSize: 11, fontWeight: 700, color: PATH_COLOR, letterSpacing: "0.06em", flexShrink: 0 }}>
+          Step 2
+        </span>
+        <span style={{ fontSize: 11, fontWeight: 700, color: C.text, letterSpacing: "0.04em", flexShrink: 0 }}>
+          Prediction
+        </span>
+        <div style={{ flex: 1, height: 1, background: `linear-gradient(to right, ${PATH_COLOR}40, transparent)` }} />
+        <span style={{ fontSize: 9, color: C.muted, flexShrink: 0 }}>
+          {completedTrees.length}/{nEstimators} trees ready
         </span>
       </div>
 
@@ -2411,35 +2656,72 @@ export default function RandomForestViz({ mode = "random-forest" }) {
             </div>
           ) : (<>
 
-            {/* ── Sample selector ─────────────────────────────────────────────── */}
-            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
+            {/* ↑ View path in tree — appears when a sample is selected */}
+            {selectedSample && (
+              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8, marginTop: -2 }}>
+                <button
+                  onClick={() => canvasRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                  style={{
+                    padding: "5px 13px", borderRadius: 20,
+                    background: "rgba(255,255,255,0.05)",
+                    border: `1px solid rgba(255,255,255,0.1)`,
+                    color: C.muted, fontSize: 10, fontWeight: 600,
+                    cursor: "pointer", fontFamily: "inherit",
+                    boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+                    transition: "color 0.15s, border-color 0.15s, background 0.15s",
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.color = C.text; e.currentTarget.style.borderColor = "rgba(255,255,255,0.22)"; e.currentTarget.style.background = "rgba(255,255,255,0.09)"; }}
+                  onMouseLeave={e => { e.currentTarget.style.color = C.muted; e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; e.currentTarget.style.background = "rgba(255,255,255,0.05)"; }}
+                >
+                  ↑ View path in tree
+                </button>
+              </div>
+            )}
+
+            {/* ── Prominent sample selector (Spotlight style) ──────────────── */}
+            <div style={{
+              position: "relative",
+              display: "flex",
+              alignItems: "center",
+              marginBottom: 20,
+              borderRadius: 16,
+              background: "rgba(255,255,255,0.04)",
+              boxShadow: "0 8px 32px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.08), inset 0 1px 0 rgba(255,255,255,0.06)",
+              overflow: "hidden",
+            }}>
+              {/* Search icon */}
+              <div style={{ padding: "0 14px 0 18px", color: C.dim, fontSize: 16, flexShrink: 0, pointerEvents: "none" }}>
+                ⌕
+              </div>
               <select
                 value={safeSampleIdx ?? ""}
                 onChange={e => setSelectedSampleIdx(e.target.value === "" ? null : +e.target.value)}
                 style={{
-                  flex: 1, minWidth: 0,
-                  background: "#161c2a", border: "none", color: safeSampleIdx !== null ? C.text : C.dim,
-                  fontSize: 10, fontFamily: "'JetBrains Mono',monospace",
-                  borderRadius: 8, padding: "5px 10px", outline: "none",
-                  boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.06)", cursor: "pointer",
+                  flex: 1, minWidth: 0, background: "transparent", border: "none",
+                  color: safeSampleIdx !== null ? C.text : C.muted,
+                  fontSize: 13, fontFamily: "'JetBrains Mono',monospace",
+                  padding: "15px 8px 15px 0", outline: "none",
+                  cursor: "pointer", appearance: "none", WebkitAppearance: "none",
                 }}
               >
-                <option value="">Select a sample to predict…</option>
+                <option value="">Pick a sample to predict…</option>
                 {activeData.map((row, i) => (
                   <option key={i} value={i}>{formatSampleLabel(row, activeFeatures, i)}</option>
                 ))}
               </select>
+              {/* Random pill */}
               <button
                 onClick={() => setSelectedSampleIdx(Math.floor(Math.random() * activeData.length))}
                 style={{
-                  flexShrink: 0, padding: "5px 12px", borderRadius: 8, border: "none",
-                  background: "rgba(255,255,255,0.05)", color: C.dim, fontSize: 10,
-                  cursor: "pointer",
-                  boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.06)",
+                  flexShrink: 0, margin: "8px 10px 8px 4px",
+                  padding: "6px 16px", borderRadius: 20, border: "none",
+                  background: "rgba(255,255,255,0.07)", color: C.muted, fontSize: 11,
+                  cursor: "pointer", fontFamily: "inherit", fontWeight: 600,
                   transition: "color .15s, background .15s",
+                  boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.1)",
                 }}
-                onMouseEnter={e => { e.currentTarget.style.color = C.text; e.currentTarget.style.background = "rgba(255,255,255,0.09)"; }}
-                onMouseLeave={e => { e.currentTarget.style.color = C.dim; e.currentTarget.style.background = "rgba(255,255,255,0.05)"; }}
+                onMouseEnter={e => { e.currentTarget.style.color = C.text; e.currentTarget.style.background = "rgba(255,255,255,0.13)"; }}
+                onMouseLeave={e => { e.currentTarget.style.color = C.muted; e.currentTarget.style.background = "rgba(255,255,255,0.07)"; }}
               >
                 Random
               </button>
@@ -2447,7 +2729,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
 
             {/* ── No sample selected ──────────────────────────────────────────── */}
             {!selectedSample && (
-              <div style={{ fontSize: 10, color: C.dimmer, paddingBottom: 2 }}>
+              <div style={{ fontSize: 10.5, color: C.dim, paddingBottom: 4, textAlign: "center", lineHeight: 1.7 }}>
                 Select a sample above to see how each tree predicts it and follow its path through the forest.
               </div>
             )}
@@ -2455,7 +2737,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
             {/* ── Per-tree vote cards ─────────────────────────────────────────── */}
             {selectedSample && (
               <>
-                <div style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+                <div style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
                   {trees.map((_, i) => {
                     const spt     = sampleTreePreds.find(t => t.idx === i);
                     const hasPred = spt !== undefined;
@@ -2509,139 +2791,178 @@ export default function RandomForestViz({ mode = "random-forest" }) {
                       </button>
                     );
                   })}
-
-                  {/* Regression: ensemble mean card */}
-                  {activeTaskType === "regression" && sampleMean !== null && (
-                    <>
-                      <div style={{ fontSize: 10, color: C.dim, marginLeft: 4 }}>→</div>
-                      <div style={{ padding: "6px 14px", borderRadius: 10, background: `${C.blue}18`, boxShadow: `inset 0 0 0 1.5px ${C.blue}55` }}>
-                        <div style={{ fontSize: 7, color: C.dim, fontWeight: 400, marginBottom: 1 }}>Ensemble mean</div>
-                        <div style={{ fontSize: 13, fontWeight: 800, color: C.blue, fontFamily: "'JetBrains Mono',monospace" }}>
-                          {formatRegVal(sampleMean)}
-                        </div>
-                      </div>
-                    </>
-                  )}
-
-                  {/* Classification: majority vote card */}
-                  {activeTaskType === "classification" && sampleMajority && (
-                    <>
-                      <div style={{ fontSize: 10, color: C.dim, marginLeft: 4 }}>→</div>
-                      <div style={{
-                        padding: "6px 14px", borderRadius: 10,
-                        background: `${classColor(sampleMajority, classLabels)}18`,
-                        boxShadow: `inset 0 0 0 1.5px ${classColor(sampleMajority, classLabels)}55`,
-                      }}>
-                        <div style={{ fontSize: 7, color: C.dim, fontWeight: 400, marginBottom: 1 }}>Majority vote</div>
-                        <div style={{ fontSize: 13, fontWeight: 800, color: classColor(sampleMajority, classLabels) }}>
-                          {sampleMajority}
-                        </div>
-                      </div>
-                    </>
-                  )}
                 </div>
 
-                {/* ── Regression result breakdown ──────────────────────────────── */}
-                {activeTaskType === "regression" && sampleMean !== null && (
-                  <div style={{ marginBottom: 10, fontSize: 10, color: C.dim, lineHeight: 1.8 }}>
-                    <span>Ensemble mean: <strong style={{ color: C.blue, fontFamily: "'JetBrains Mono',monospace" }}>{formatRegVal(sampleMean)}</strong></span>
-                    <span style={{ color: C.dimmer }}> ({completedTrees.length} tree{completedTrees.length !== 1 ? "s" : ""})</span>
-                    {sampleTrueLabel !== null && (<>
-                      <span style={{ color: C.dimmer }}> · True: </span>
-                      <strong style={{ fontFamily: "'JetBrains Mono',monospace", color: C.text }}>{formatRegVal(sampleTrueLabel)}</strong>
-                      <span style={{ color: C.dimmer }}> · Error: </span>
-                      <strong style={{ fontFamily: "'JetBrains Mono',monospace", color: Math.abs(sampleMean - sampleTrueLabel) / (Math.abs(sampleTrueLabel) || 1) < 0.1 ? C.green : C.orange }}>
-                        {formatRegVal(Math.abs(sampleMean - sampleTrueLabel))}
-                      </strong>
-                    </>)}
-                  </div>
-                )}
+                {/* ── Ensemble result — prominent card ────────────────────────── */}
+                {activeTaskType === "regression" && sampleMean !== null && (() => {
+                  const err = sampleTrueLabel !== null ? Math.abs(sampleMean - sampleTrueLabel) : null;
+                  const relErr = err !== null && Math.abs(sampleTrueLabel) > 0 ? err / Math.abs(sampleTrueLabel) : null;
+                  const errColor = relErr !== null ? (relErr < 0.1 ? C.green : relErr < 0.25 ? C.orange : C.red) : C.muted;
+                  return (
+                    <div style={{
+                      marginBottom: 16, padding: "18px 20px",
+                      borderRadius: 14,
+                      background: `linear-gradient(135deg, ${C.blue}12, rgba(10,14,23,0.6))`,
+                      boxShadow: `0 0 0 1.5px ${C.blue}55, 0 4px 24px ${C.blue}18, inset 0 1px 0 ${C.blue}22`,
+                    }}>
+                      <div style={{ fontSize: 9, color: C.dim, fontWeight: 500, marginBottom: 6, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+                        Ensemble prediction · {completedTrees.length} tree{completedTrees.length !== 1 ? "s" : ""}
+                      </div>
+                      <div style={{ fontSize: 28, fontWeight: 800, color: C.blue, fontFamily: "'JetBrains Mono',monospace", lineHeight: 1, marginBottom: 10 }}>
+                        {formatRegVal(sampleMean)}
+                      </div>
+                      {sampleTrueLabel !== null && (
+                        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.05em" }}>True</span>
+                            <span style={{ fontSize: 14, fontWeight: 700, color: C.text, fontFamily: "'JetBrains Mono',monospace" }}>{formatRegVal(sampleTrueLabel)}</span>
+                          </div>
+                          <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.1)" }} />
+                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.05em" }}>Error</span>
+                            <span style={{ fontSize: 14, fontWeight: 700, color: errColor, fontFamily: "'JetBrains Mono',monospace" }}>{formatRegVal(err)}</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
 
-                {/* ── Classification vote breakdown + correctness ───────────────── */}
-                {activeTaskType === "classification" && sampleMajority && (
-                  <div style={{ marginBottom: 10 }}>
-                    <div style={{ fontSize: 10, color: C.dim, marginBottom: 5, lineHeight: 1.6 }}>
-                      {classLabels.map((cls, i, arr) => {
-                        const n = sampleVotesPerClass[cls] ?? 0;
-                        if (n === 0) return null;
-                        return (
-                          <span key={cls}>
-                            <strong style={{ color: classColor(cls, classLabels) }}>{n}</strong>
-                            <span style={{ color: C.dimmer }}>/{completedTrees.length} </span>
-                            <span style={{ color: classColor(cls, classLabels) }}>{cls}</span>
-                            {i < arr.length - 1 && <span style={{ color: C.dimmer }}> · </span>}
-                          </span>
-                        );
-                      })}
-                      <span style={{ marginLeft: 8, color: C.dimmer }}>True: </span>
-                      <strong style={{ color: classColor(sampleTrueLabel, classLabels) }}>{sampleTrueLabel}</strong>
-                      {" "}
-                      <span style={{ color: sampleCorrect ? C.green : C.red, fontWeight: 700 }}>
-                        {sampleCorrect ? "✓" : "✗"}
-                      </span>
+                {/* ── Classification ensemble result — prominent card ───────────── */}
+                {activeTaskType === "classification" && sampleMajority && (() => {
+                  const majColor = classColor(sampleMajority, classLabels);
+                  return (
+                    <div style={{
+                      marginBottom: 16, padding: "18px 20px",
+                      borderRadius: 14,
+                      background: `linear-gradient(135deg, ${majColor}12, rgba(10,14,23,0.6))`,
+                      boxShadow: `0 0 0 1.5px ${majColor}55, 0 4px 24px ${majColor}18, inset 0 1px 0 ${majColor}22`,
+                    }}>
+                      <div style={{ fontSize: 9, color: C.dim, fontWeight: 500, marginBottom: 6, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+                        Ensemble prediction · {completedTrees.length} tree{completedTrees.length !== 1 ? "s" : ""}
+                      </div>
+                      <div style={{ fontSize: 26, fontWeight: 800, color: majColor, lineHeight: 1, marginBottom: 10 }}>
+                        {sampleMajority}
+                      </div>
+                      {/* Vote bar */}
+                      <div style={{ marginBottom: 10 }}>
+                        <div style={{ height: 6, borderRadius: 3, overflow: "hidden", background: "rgba(0,0,0,0.3)", display: "flex", marginBottom: 5 }}>
+                          {classLabels.map(cls => {
+                            const pct = ((sampleVotesPerClass[cls] ?? 0) / completedTrees.length) * 100;
+                            return pct > 0
+                              ? <div key={cls} style={{ width: `${pct}%`, background: classColor(cls, classLabels), transition: "width .3s" }} />
+                              : null;
+                          })}
+                        </div>
+                        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                          {classLabels.map(cls => {
+                            const n = sampleVotesPerClass[cls] ?? 0;
+                            if (n === 0) return null;
+                            return (
+                              <span key={cls} style={{ fontSize: 9, color: C.muted }}>
+                                <strong style={{ color: classColor(cls, classLabels), fontFamily: "'JetBrains Mono',monospace" }}>{n}</strong>
+                                <span style={{ color: C.dimmer }}>/{completedTrees.length} </span>
+                                <span style={{ color: classColor(cls, classLabels) }}>{cls}</span>
+                              </span>
+                            );
+                          })}
+                        </div>
+                      </div>
+                      {sampleTrueLabel !== null && (
+                        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center", paddingTop: 10, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.05em" }}>True</span>
+                            <span style={{ fontSize: 14, fontWeight: 700, color: classColor(sampleTrueLabel, classLabels) }}>{sampleTrueLabel}</span>
+                          </div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <span style={{ fontSize: 14, fontWeight: 800, color: sampleCorrect ? C.green : C.red }}>
+                              {sampleCorrect ? "✓ Correct" : "✗ Wrong"}
+                            </span>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                    <div style={{ height: 6, borderRadius: 3, overflow: "hidden", background: "#151a24", display: "flex" }}>
-                      {classLabels.map(cls => {
-                        const pct = ((sampleVotesPerClass[cls] ?? 0) / completedTrees.length) * 100;
-                        return pct > 0
-                          ? <div key={cls} style={{ width: `${pct}%`, background: classColor(cls, classLabels), transition: "width .3s" }} />
-                          : null;
-                      })}
-                    </div>
-                  </div>
-                )}
+                  );
+                })()}
               </>
             )}
 
-            {/* ── Accuracy summary ────────────────────────────────────────────── */}
-            {/* Classification */}
+            {/* ── Metrics cards ───────────────────────────────────────────────── */}
             {activeTaskType === "classification" && (forestAccuracy !== null || avgOobAccuracy !== null) && (
-              <div style={{ marginTop: selectedSample ? 4 : 0, paddingTop: 10, borderTop: "1px solid rgba(255,255,255,0.05)", fontSize: 9.5, color: C.dimmer, display: "flex", gap: 16, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", gap: 10, marginTop: selectedSample ? 4 : 0 }}>
                 {forestAccuracy !== null && (
-                  <span>Forest accuracy: <strong style={{ color: C.dim }}>{forestAccuracy}%</strong><span style={{ color: C.dimmer }}> (training)</span></span>
+                  <div style={{
+                    flex: 1, padding: "12px 14px", borderRadius: 12,
+                    background: "rgba(255,255,255,0.03)",
+                    boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.07)",
+                  }}>
+                    <div style={{ fontSize: 8, color: C.dim, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 6 }}>Training</div>
+                    <div style={{ fontSize: 9, color: C.muted, marginBottom: 2 }}>Accuracy</div>
+                    <div style={{ fontSize: 20, fontWeight: 800, color: C.text, fontFamily: "'JetBrains Mono',monospace" }}>{forestAccuracy}%</div>
+                  </div>
                 )}
                 {avgOobAccuracy !== null && (
-                  <span style={{ display: "flex", alignItems: "center", gap: 4, position: "relative" }}>
-                    OOB accuracy: <strong style={{ color: C.dim }}>{avgOobAccuracy}%</strong>
-                    <span style={{ color: C.dimmer }}> (unseen)</span>
-                    <span style={{ cursor: "help", color: C.dimmer, userSelect: "none" }}
-                      onMouseEnter={() => setOobTooltipVisible(true)}
-                      onMouseLeave={() => setOobTooltipVisible(false)}> ⓘ</span>
+                  <div style={{
+                    flex: 1, padding: "12px 14px", borderRadius: 12,
+                    background: `${C.green}0d`,
+                    boxShadow: `inset 0 0 0 1px ${C.green}44`,
+                    position: "relative",
+                  }}>
+                    <div style={{ fontSize: 8, color: C.green, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 6, display: "flex", alignItems: "center", gap: 5 }}>
+                      Out-of-Bag
+                      <span style={{ cursor: "help", color: C.dim, fontWeight: 400 }}
+                        onMouseEnter={() => setOobTooltipVisible(true)}
+                        onMouseLeave={() => setOobTooltipVisible(false)}>ⓘ</span>
+                    </div>
+                    <div style={{ fontSize: 9, color: C.muted, marginBottom: 2 }}>Accuracy</div>
+                    <div style={{ fontSize: 20, fontWeight: 800, color: C.green, fontFamily: "'JetBrains Mono',monospace" }}>{avgOobAccuracy}%</div>
                     {oobTooltipVisible && (
                       <div style={{ position: "absolute", bottom: "calc(100% + 6px)", left: 0, width: 240, background: "#141b2d", borderRadius: 9, padding: "9px 12px", fontSize: 9.5, color: C.dim, lineHeight: 1.6, boxShadow: "0 8px 32px rgba(0,0,0,0.6), inset 0 0 0 1px rgba(255,255,255,0.08)", zIndex: 20, pointerEvents: "none" }}>
                         Each tree is tested on the ~37% of samples not used in its bootstrap training set.
                         This gives an unbiased estimate of generalization error with no held-out test set needed.
                       </div>
                     )}
-                  </span>
+                  </div>
                 )}
               </div>
             )}
-            {/* Regression */}
             {activeTaskType === "regression" && (forestRegMetrics !== null || avgOobR2 !== null) && (
-              <div style={{ marginTop: selectedSample ? 4 : 0, paddingTop: 10, borderTop: "1px solid rgba(255,255,255,0.05)", fontSize: 9.5, color: C.dimmer, display: "flex", gap: 16, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", gap: 10, marginTop: selectedSample ? 4 : 0 }}>
                 {forestRegMetrics !== null && (
-                  <span>
-                    R²: <strong style={{ color: C.dim }}>{forestRegMetrics.r2}</strong>
-                    {" · "}RMSE: <strong style={{ color: C.dim }}>{forestRegMetrics.rmse}</strong>
-                    <span style={{ color: C.dimmer }}> (training)</span>
-                  </span>
+                  <div style={{
+                    flex: 1, padding: "12px 14px", borderRadius: 12,
+                    background: "rgba(255,255,255,0.03)",
+                    boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.07)",
+                  }}>
+                    <div style={{ fontSize: 8, color: C.dim, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 6 }}>Training</div>
+                    <div style={{ fontSize: 9, color: C.muted, marginBottom: 2 }}>R²</div>
+                    <div style={{ fontSize: 20, fontWeight: 800, color: C.text, fontFamily: "'JetBrains Mono',monospace" }}>{forestRegMetrics.r2}</div>
+                    <div style={{ fontSize: 9, color: C.muted, marginTop: 6 }}>RMSE <span style={{ color: C.text, fontFamily: "'JetBrains Mono',monospace", fontWeight: 700 }}>{forestRegMetrics.rmse}</span></div>
+                  </div>
                 )}
                 {avgOobR2 !== null && (
-                  <span style={{ display: "flex", alignItems: "center", gap: 4, position: "relative" }}>
-                    OOB R²: <strong style={{ color: C.dim }}>{avgOobR2}</strong>
-                    {" · "}RMSE: <strong style={{ color: C.dim }}>{avgOobRMSE}</strong>
-                    <span style={{ color: C.dimmer }}> (unseen)</span>
-                    <span style={{ cursor: "help", color: C.dimmer, userSelect: "none" }}
-                      onMouseEnter={() => setOobTooltipVisible(true)}
-                      onMouseLeave={() => setOobTooltipVisible(false)}> ⓘ</span>
+                  <div style={{
+                    flex: 1, padding: "12px 14px", borderRadius: 12,
+                    background: `${C.green}0d`,
+                    boxShadow: `inset 0 0 0 1px ${C.green}44`,
+                    position: "relative",
+                  }}>
+                    <div style={{ fontSize: 8, color: C.green, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 6, display: "flex", alignItems: "center", gap: 5 }}>
+                      Out-of-Bag
+                      <span style={{ cursor: "help", color: C.dim, fontWeight: 400 }}
+                        onMouseEnter={() => setOobTooltipVisible(true)}
+                        onMouseLeave={() => setOobTooltipVisible(false)}>ⓘ</span>
+                    </div>
+                    <div style={{ fontSize: 9, color: C.muted, marginBottom: 2 }}>R²</div>
+                    <div style={{ fontSize: 20, fontWeight: 800, color: C.green, fontFamily: "'JetBrains Mono',monospace" }}>{avgOobR2}</div>
+                    <div style={{ fontSize: 9, color: C.muted, marginTop: 6 }}>RMSE <span style={{ color: C.green, fontFamily: "'JetBrains Mono',monospace", fontWeight: 700 }}>{avgOobRMSE}</span></div>
                     {oobTooltipVisible && (
                       <div style={{ position: "absolute", bottom: "calc(100% + 6px)", left: 0, width: 260, background: "#141b2d", borderRadius: 9, padding: "9px 12px", fontSize: 9.5, color: C.dim, lineHeight: 1.6, boxShadow: "0 8px 32px rgba(0,0,0,0.6), inset 0 0 0 1px rgba(255,255,255,0.08)", zIndex: 20, pointerEvents: "none" }}>
                         R² measures proportion of variance explained. 1.0 is perfect, 0.0 is no better than predicting the mean.
                         OOB estimates this on the ~37% of samples held out from each tree's bootstrap.
                       </div>
                     )}
-                  </span>
+                  </div>
                 )}
               </div>
             )}
@@ -2651,7 +2972,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
       </div>
 
       {/* Footer */}
-      <div style={{ padding: "8px 16px", boxShadow: "0 -1px 0 rgba(255,255,255,0.04)", fontSize: 8.5, color: C.dimmer, textAlign: "center" }}>
+      <div style={{ padding: "8px 16px", boxShadow: "0 -1px 0 rgba(255,255,255,0.04)", fontSize: 8.5, color: C.dim, textAlign: "center" }}>
         max_features={subsetSize}/{activeFeatures.length} · Trees: {nEstimators} · Bootstrap n={TOTAL_SAMPLES}
       </div>
 

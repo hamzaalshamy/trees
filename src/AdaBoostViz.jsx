@@ -17,8 +17,8 @@ const EMPTY_TS = { visibleIds: [], nodeId: null, phase: 0, stepIdx: -1 };
 
 // ─── Cumulative Error Chart ────────────────────────────────────────────────────
 function ErrorChart({ accuracies, completedCount }) {
-  const [hovered, setHovered] = useState(null); // index of hovered point
-  const W = 220, H = 110, PAD = { t: 10, r: 10, b: 24, l: 36 };
+  const [hovered, setHovered] = useState(null);
+  const W = 220, H = 120, PAD = { t: 10, r: 42, b: 24, l: 36 };
   const iW = W - PAD.l - PAD.r, iH = H - PAD.t - PAD.b;
   const visible = accuracies.slice(0, completedCount).map(a => 100 - (a ?? 100));
   if (!visible.length) return (
@@ -27,9 +27,8 @@ function ErrorChart({ accuracies, completedCount }) {
     </div>
   );
   const maxErr = Math.max(...visible, 0.1);
-  const minErr = 0;
   const xScale = n => PAD.l + (n / Math.max(accuracies.length - 1, 1)) * iW;
-  const yScale = v => PAD.t + iH - ((v - minErr) / (maxErr - minErr || 1)) * iH;
+  const yScale = v => PAD.t + iH - (v / (maxErr || 1)) * iH;
   const pts = visible.map((v, i) => [xScale(i), yScale(v)]);
   const path = pts.map((p, i) => `${i === 0 ? "M" : "L"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
   const area = [
@@ -40,13 +39,15 @@ function ErrorChart({ accuracies, completedCount }) {
   ].join(" ");
   const yTicks = [0, maxErr / 2, maxErr].map(v => ({ val: v, y: yScale(v) }));
   const xLabels = [1, Math.ceil(accuracies.length / 2), accuracies.length].filter((v, i, arr) => arr.indexOf(v) === i);
-  const hp = hovered !== null ? pts[hovered] : null;
+
+  // Show inline labels only when there are few enough points that they don't crowd
+  const showInlineLabels = accuracies.length <= 8;
 
   return (
     <svg width={W} height={H} style={{ overflow: "visible", display: "block" }}>
       <defs>
         <linearGradient id="errGrad" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={C.orange} stopOpacity="0.28" />
+          <stop offset="0%" stopColor={C.orange} stopOpacity="0.25" />
           <stop offset="100%" stopColor={C.orange} stopOpacity="0" />
         </linearGradient>
       </defs>
@@ -55,8 +56,8 @@ function ErrorChart({ accuracies, completedCount }) {
           stroke="rgba(255,255,255,0.05)" strokeWidth={1} />
       ))}
       <path d={area} fill="url(#errGrad)" />
-      <path d={path} fill="none" stroke={C.orange} strokeWidth={1.8} strokeLinejoin="round" strokeLinecap="round" />
-      {/* Invisible hit-area rects between points */}
+      <path d={path} fill="none" stroke={C.orange} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+      {/* Invisible hit-area rects for hover */}
       {pts.map(([x], i) => (
         <rect key={i}
           x={i === 0 ? PAD.l : (pts[i-1][0] + x) / 2}
@@ -70,10 +71,40 @@ function ErrorChart({ accuracies, completedCount }) {
           style={{ cursor: "crosshair" }}
         />
       ))}
+      {/* Dots */}
       {pts.map(([x, y], i) => (
-        <circle key={i} cx={x} cy={y} r={hovered === i ? 4 : 2.5}
+        <circle key={i} cx={x} cy={y} r={hovered === i ? 5 : 3.5}
           fill={C.orange} style={{ transition: "r 0.1s", pointerEvents: "none" }} />
       ))}
+      {/* Always-visible percentage labels next to each dot */}
+      {showInlineLabels && pts.map(([x, y], i) => {
+        const labelRight = x + 5;
+        const labelY = y + 3;
+        return (
+          <text key={i} x={labelRight} y={labelY}
+            fill={hovered === i ? C.text : `${C.orange}bb`}
+            fontSize={7} fontFamily={MONO}
+            style={{ pointerEvents: "none", transition: "fill 0.1s" }}>
+            {visible[i].toFixed(1)}%
+          </text>
+        );
+      })}
+      {/* Hover tooltip for dense charts */}
+      {!showInlineLabels && hovered !== null && pts[hovered] && (() => {
+        const [hx, hy] = pts[hovered];
+        const tx = hx + (hx > PAD.l + iW * 0.55 ? -62 : 6);
+        const ty = Math.max(PAD.t + 2, hy - 18);
+        return (
+          <g pointerEvents="none">
+            <rect x={tx - 4} y={ty - 10} width={60} height={20} rx={4}
+              fill="#1a2235" stroke="rgba(255,255,255,0.12)" strokeWidth={0.8} />
+            <text x={tx + 26} y={ty + 4} textAnchor="middle" fill={C.orange}
+              fontSize={8} fontFamily={MONO} fontWeight={600}>
+              R{hovered + 1}: {visible[hovered].toFixed(1)}% err
+            </text>
+          </g>
+        );
+      })()}
       {yTicks.map(({ val, y }, i) => (
         <text key={i} x={PAD.l - 5} y={y + 3} textAnchor="end" fill={C.dimmer} fontSize={7.5} fontFamily={MONO}>
           {val.toFixed(0)}%
@@ -86,94 +117,126 @@ function ErrorChart({ accuracies, completedCount }) {
       ))}
       <line x1={PAD.l} y1={PAD.t} x2={PAD.l} y2={PAD.t + iH} stroke={C.edge} strokeWidth={1} />
       <line x1={PAD.l} y1={PAD.t + iH} x2={PAD.l + iW} y2={PAD.t + iH} stroke={C.edge} strokeWidth={1} />
-      {/* Hover tooltip */}
-      {hp && hovered !== null && (() => {
-        const tx = hp[0] + (hp[0] > PAD.l + iW * 0.6 ? -58 : 6);
-        const ty = Math.max(PAD.t + 2, hp[1] - 18);
-        return (
-          <g pointerEvents="none">
-            <rect x={tx - 4} y={ty - 10} width={56} height={20} rx={4}
-              fill="#1a2235" stroke="rgba(255,255,255,0.12)" strokeWidth={0.8} />
-            <text x={tx + 24} y={ty + 4} textAnchor="middle" fill={C.orange}
-              fontSize={8} fontFamily={MONO} fontWeight={600}>
-              R{hovered + 1}: {visible[hovered].toFixed(1)}% err
-            </text>
-          </g>
-        );
-      })()}
     </svg>
   );
 }
 
 // ─── Weight Bar Chart ──────────────────────────────────────────────────────────
-function WeightChart({ weights, sortWeights, classColors, predCorrect, showPredColors, maxH = 120 }) {
+// Renders as SVG so we can draw a proper y-axis alongside the bars.
+// Layout: left pad = 42px for y-axis labels, right pad = 24px for "1/n" label.
+const WC_L = 42, WC_R = 24, WC_T = 6, WC_B = 2;
+
+function fmtWeight(v) {
+  if (v === 0) return "0";
+  if (v < 0.0001) return v.toExponential(1);
+  if (v < 0.01)   return v.toFixed(4);
+  if (v < 0.1)    return v.toFixed(3);
+  return v.toFixed(2);
+}
+
+function WeightChart({ weights, classColors, predCorrect, showPredColors, maxH = 120 }) {
   const n = weights?.length ?? 0;
   if (!n) return null;
-  const useHistogram = n > 500;
+
+  const SVG_W = 240;
+  const SVG_H = maxH + WC_T + WC_B;
+  const iW = SVG_W - WC_L - WC_R;
+  const iH = maxH;
+
   const maxW = Math.max(...weights, 1e-10);
-  const avgW  = 1 / n;
-  const avgH  = Math.max(1, (avgW / maxW) * maxH);
+  const avgW = 1 / n;
+  const avgY = WC_T + iH * (1 - Math.min(avgW / maxW, 1));
 
-  if (useHistogram) {
-    const BINS = 30;
-    const binW = maxW / BINS;
-    const counts = new Array(BINS).fill(0);
-    weights.forEach(w => {
-      const bi = Math.min(BINS - 1, Math.floor(w / binW));
-      counts[bi]++;
-    });
-    const maxC = Math.max(...counts, 1);
-    return (
-      <div style={{ position: "relative" }}>
-        <div style={{ display: "flex", alignItems: "flex-end", gap: 1, height: maxH }}>
-          {counts.map((c, i) => (
-            <div key={i} style={{
-              flex: 1, height: `${(c / maxC) * maxH}px`,
-              background: C.accent, borderRadius: "2px 2px 0 0",
-              minHeight: c > 0 ? 2 : 0,
-            }} />
-          ))}
-        </div>
-        <div style={{ position: "absolute", bottom: avgH, left: 0, right: 0, height: 1,
-          background: "rgba(255,255,255,0.3)", pointerEvents: "none" }}>
-          <span style={{ position: "absolute", right: 2, top: -8, fontSize: 7,
-            color: "rgba(255,255,255,0.45)", fontFamily: MONO }}>1/n</span>
-        </div>
-      </div>
-    );
-  }
+  // Sort indices by weight descending — creates the distribution curve shape
+  const sortedIndices = [...Array(n).keys()].sort((a, b) => weights[b] - weights[a]);
 
-  // Sort indices by sortWeights (or weights) descending — decay curve shape
-  const base = sortWeights ?? weights;
-  const sortedIndices = [...Array(n).keys()].sort((a, b) => base[b] - base[a]);
+  // Envelope path tracing the top edges of sorted bars
+  const envPts = sortedIndices.map((si, pos) => {
+    const x = WC_L + (pos / n) * iW;
+    const y = WC_T + iH * (1 - weights[si] / maxW);
+    return [x.toFixed(1), y.toFixed(1)];
+  });
+  const envLine = envPts.map((p, i) => `${i === 0 ? "M" : "L"}${p[0]},${p[1]}`).join(" ");
+  const envArea = [
+    `M${WC_L},${WC_T + iH}`,
+    ...envPts.map(p => `L${p[0]},${p[1]}`),
+    `L${(WC_L + iW).toFixed(1)},${WC_T + iH}`,
+    "Z",
+  ].join(" ");
+
+  // Y-axis ticks: max, midpoint, 1/n (avg), 0
+  const rawTicks = [maxW, maxW / 2, avgW, 0];
+  // Remove ticks that are too close to each other (< 12% of range apart)
+  const minGap = maxW * 0.12;
+  const yTicks = rawTicks.reduce((acc, v) => {
+    if (!acc.some(u => Math.abs(u - v) < minGap)) acc.push(v);
+    return acc;
+  }, []).map(v => ({ v, y: WC_T + iH * (1 - v / maxW) }));
+
+  const barW = iW / n;
+  const gradId = `wg-${n}`; // unique per render key; n is stable per round
 
   return (
-    <div style={{ position: "relative" }}>
-      <div style={{ display: "flex", alignItems: "flex-end", height: maxH, gap: 0, overflow: "hidden" }}>
-        {sortedIndices.map((i) => {
-          let bg = classColors[i] ?? C.dim;
-          if (showPredColors && predCorrect !== null) {
-            bg = predCorrect[i] ? "#10b981" : "#ef4444";
-          }
-          return (
-            <div key={i} style={{
-              flex: 1, minWidth: 1,
-              height: `${Math.max(2, (weights[i] / maxW) * maxH)}px`,
-              background: bg,
-              borderRadius: "1px 1px 0 0",
-              transition: "height 0.55s ease, background 0.3s ease",
-              opacity: 0.85,
-            }} />
-          );
-        })}
-      </div>
-      {/* Average weight reference line */}
-      <div style={{ position: "absolute", bottom: avgH, left: 0, right: 0, height: 1,
-        background: "rgba(255,255,255,0.28)", pointerEvents: "none" }}>
-        <span style={{ position: "absolute", right: 2, top: -8, fontSize: 7,
-          color: "rgba(255,255,255,0.45)", fontFamily: MONO }}>1/n</span>
-      </div>
-    </div>
+    <svg width="100%" height={SVG_H} viewBox={`0 0 ${SVG_W} ${SVG_H}`}
+      style={{ display: "block", overflow: "visible" }}>
+      <defs>
+        <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="rgba(255,255,255,0.12)" />
+          <stop offset="100%" stopColor="rgba(255,255,255,0)" />
+        </linearGradient>
+      </defs>
+
+      {/* Grid lines at each y-tick */}
+      {yTicks.map(({ y }, i) => (
+        <line key={i} x1={WC_L} y1={y} x2={WC_L + iW} y2={y}
+          stroke="rgba(255,255,255,0.05)" strokeWidth={0.8} />
+      ))}
+
+      {/* Colored bars (class colors or correct/misclassified) */}
+      {sortedIndices.map((si, pos) => {
+        const x = WC_L + (pos / n) * iW;
+        const h = Math.max(1, (weights[si] / maxW) * iH);
+        const fill = showPredColors && predCorrect !== null
+          ? (predCorrect[si] ? "#10b981" : "#ef4444")
+          : (classColors[si] ?? C.dim);
+        return (
+          <rect key={si}
+            x={x} y={WC_T + iH - h}
+            width={Math.max(1, barW)} height={h}
+            fill={fill} opacity={0.72}
+          />
+        );
+      })}
+
+      {/* Envelope: area fill + top-edge line to show distribution shape */}
+      <path d={envArea} fill={`url(#${gradId})`} />
+      <path d={envLine} fill="none"
+        stroke="rgba(255,255,255,0.45)" strokeWidth={1.2}
+        strokeLinejoin="round" strokeLinecap="round" />
+
+      {/* 1/n reference line */}
+      <line x1={WC_L} y1={avgY} x2={WC_L + iW} y2={avgY}
+        stroke="rgba(255,255,255,0.32)" strokeWidth={1}
+        strokeDasharray="3 2" />
+      <text x={WC_L + iW + 3} y={avgY + 3}
+        fill="rgba(255,255,255,0.45)" fontSize={6.5} fontFamily={MONO}>1/n</text>
+
+      {/* Y-axis line */}
+      <line x1={WC_L} y1={WC_T} x2={WC_L} y2={WC_T + iH}
+        stroke={C.edge} strokeWidth={0.8} />
+
+      {/* Y-axis tick marks + labels */}
+      {yTicks.map(({ v, y }, i) => (
+        <g key={i}>
+          <line x1={WC_L - 3} y1={y} x2={WC_L} y2={y}
+            stroke={C.dimmer} strokeWidth={0.8} />
+          <text x={WC_L - 5} y={y + 3} textAnchor="end"
+            fill={C.dimmer} fontSize={6.5} fontFamily={MONO}>
+            {fmtWeight(v)}
+          </text>
+        </g>
+      ))}
+    </svg>
   );
 }
 
@@ -229,6 +292,8 @@ export default function AdaBoostViz() {
   const [selectedSampleIdx,  setSelectedSampleIdx]  = useState(null);
   const [lockedTip,          setLockedTip]          = useState(null); // { top, left } | null
   const [resetTooltip,       setResetTooltip]       = useState(null); // { x, y }
+  const [tabTooltip,         setTabTooltip]         = useState(null); // { top, left } | null
+  const [dragRange,          setDragRange]          = useState(null); // { start, end } | null
   const [weightDisplayMode,  setWeightDisplayMode]  = useState("input"); // "input"|"output"
   const [calcExpanded,       setCalcExpanded]       = useState(true);
   const [calcPanelWidth,     setCalcPanelWidth]     = useState(220);
@@ -247,6 +312,9 @@ export default function AdaBoostViz() {
   const liveStepRef   = useRef({ roundIdx: 0, phase: 0, stepIdx: -1 });
   const pausedAtRef   = useRef(null);
   const resetClickRef = useRef(null);
+  const tabDragRef    = useRef({ active: false, startIdx: null, endIdx: null, moved: false });
+  const tabRefs       = useRef([]);
+  const tabScrollRef  = useRef(null);
 
   // Zoom / pan
   const [zoom, setZoom] = useState(1);
@@ -384,13 +452,24 @@ export default function AdaBoostViz() {
     const tree = roundData[rIdx]?.tree;
     if (!tree) return [];
     const nodes = flattenNodes(tree).sort((a, b) => a.depth - b.depth);
+    const nodeMap = Object.fromEntries(nodes.map(n => [n.id, n]));
     const steps = [];
+    const handledLeaves = new Set();
     nodes.forEach(n => {
       if (n.type === "split") {
         steps.push({ nodeId: n.id, phase: 0 });
         steps.push({ nodeId: n.id, phase: 1 });
         steps.push({ nodeId: n.id, phase: 2, commit: true });
-      } else {
+        // Batch-commit both direct leaf children in a single step
+        const lc = nodeMap[n.id + "L"];
+        const rc = nodeMap[n.id + "R"];
+        const leafBatch = [lc, rc].filter(c => c?.type === "leaf");
+        if (leafBatch.length > 0) {
+          leafBatch.forEach(c => handledLeaves.add(c.id));
+          steps.push({ nodeId: null, commitIds: leafBatch.map(c => c.id), parentSplitId: n.id, phase: 2, isLeafBatch: true });
+        }
+      } else if (!handledLeaves.has(n.id)) {
+        // Orphan leaf (shouldn't occur in typical trees, safety fallback)
         steps.push({ nodeId: n.id, phase: 0 });
         steps.push({ nodeId: n.id, phase: 1, commit: true });
       }
@@ -398,31 +477,36 @@ export default function AdaBoostViz() {
     return steps;
   }, [roundData]);
 
+  // Build visibleIds array from steps[0..targetIdx], honouring both single-id and batch commits
+  const buildVis = useCallback((steps, targetIdx) => {
+    const vis = [];
+    for (let i = 0; i <= targetIdx; i++) {
+      const s = steps[i];
+      if (s.commitIds) { s.commitIds.forEach(id => { if (!vis.includes(id)) vis.push(id); }); }
+      else if (s.commit && s.nodeId && !vis.includes(s.nodeId)) vis.push(s.nodeId);
+    }
+    return vis;
+  }, []);
+
   const goToStep = useCallback((rIdx, targetIdx) => {
     const steps = getSteps(rIdx);
     if (!steps.length) return;
     if (targetIdx < -1) targetIdx = -1;
     if (targetIdx >= steps.length) targetIdx = steps.length - 1;
     if (targetIdx === -1) { setTS(rIdx, EMPTY_TS); return; }
-    const vis = [];
-    for (let i = 0; i <= targetIdx; i++) {
-      if (steps[i].commit && !vis.includes(steps[i].nodeId)) vis.push(steps[i].nodeId);
-    }
+    const vis = buildVis(steps, targetIdx);
     const s = steps[targetIdx];
-    setTS(rIdx, { visibleIds: vis, nodeId: s.nodeId, phase: s.phase, stepIdx: targetIdx });
-  }, [getSteps, setTS]);
+    setTS(rIdx, { visibleIds: vis, nodeId: s.nodeId ?? null, phase: s.phase, stepIdx: targetIdx });
+  }, [getSteps, setTS, buildVis]);
 
   const instantComplete = useCallback((rIdx) => {
     const steps = getSteps(rIdx);
     if (!steps.length) return;
     const lastIdx = steps.length - 1;
-    const vis = [];
-    for (let i = 0; i <= lastIdx; i++) {
-      if (steps[i].commit && !vis.includes(steps[i].nodeId)) vis.push(steps[i].nodeId);
-    }
+    const vis = buildVis(steps, lastIdx);
     const s = steps[lastIdx];
-    setTS(rIdx, { visibleIds: vis, nodeId: s.nodeId, phase: s.phase, stepIdx: lastIdx });
-  }, [getSteps, setTS]);
+    setTS(rIdx, { visibleIds: vis, nodeId: s.nodeId ?? null, phase: s.phase, stepIdx: lastIdx });
+  }, [getSteps, setTS, buildVis]);
 
   // ── Phase advance/retreat ────────────────────────────────────────────────────
   const advanceStep = useCallback(() => {
@@ -483,6 +567,30 @@ export default function AdaBoostViz() {
     }
   }, [roundData, goToStep]);
 
+  // ── Drag-to-complete: global mouseup ─────────────────────────────────────────
+  useEffect(() => {
+    const onMouseUp = () => {
+      if (!tabDragRef.current.active) return;
+      const { startIdx, endIdx, moved } = tabDragRef.current;
+      tabDragRef.current = { active: false, startIdx: null, endIdx: null, moved: false };
+      setDragRange(null);
+      if (moved && startIdx !== null && endIdx !== null) {
+        setHintDismissed(true);
+        const lo = Math.min(startIdx, endIdx);
+        const hi = Math.max(startIdx, endIdx);
+        for (let j = lo; j <= hi; j++) {
+          instantComplete(j);
+          setCompletedCount(c => Math.max(c, j + 1));
+        }
+        setCurRound(Math.max(startIdx, endIdx));
+        setRoundPhase(5);
+        setWeightDisplayMode("output");
+      }
+    };
+    window.addEventListener("mouseup", onMouseUp);
+    return () => window.removeEventListener("mouseup", onMouseUp);
+  }, [instantComplete]);
+
   // Weight display: transition from input → output during phase 4
   useEffect(() => {
     if (roundPhase !== 4) {
@@ -532,11 +640,8 @@ export default function AdaBoostViz() {
         for (let i = fromStep; i < steps.length; i++) {
           if (cancelRef.current) break;
           liveStepRef.current = { roundIdx: rIdx, phase: 1, stepIdx: i };
-          const vis = [];
-          for (let j = 0; j <= i; j++) {
-            if (steps[j].commit && !vis.includes(steps[j].nodeId)) vis.push(steps[j].nodeId);
-          }
-          setTS(rIdx, { visibleIds: vis, nodeId: steps[i].nodeId, phase: steps[i].phase, stepIdx: i });
+          const vis = buildVis(steps, i);
+          setTS(rIdx, { visibleIds: vis, nodeId: steps[i].nodeId ?? null, phase: steps[i].phase, stepIdx: i });
           await sleep(180 / speed);
         }
       }
@@ -576,7 +681,7 @@ export default function AdaBoostViz() {
 
     growRef.current = false;
     setGrowing(false);
-  }, [roundData, completedCount, speed, getSteps, setTS]);
+  }, [roundData, completedCount, speed, getSteps, setTS, buildVis]);
 
   const growAllInstant = useCallback(() => {
     if (growing) return;
@@ -723,6 +828,7 @@ export default function AdaBoostViz() {
   const visibleSet  = new Set(ts.visibleIds);
   const currentNode = allNodes.find(n => n.id === ts.nodeId);
   const totalSteps  = getSteps(curRound).length;
+  const currentStep = ts.stepIdx >= 0 ? getSteps(curRound)[ts.stepIdx] : null;
 
   // Current feature pool data (from the node being animated)
   const fpNode = allNodes.find(n => n.id === ts.nodeId && n.type === "split") ?? null;
@@ -1122,62 +1228,130 @@ export default function AdaBoostViz() {
       </div>
 
       {/* ── Round tabs ──────────────────────────────────────────────────────── */}
-      {roundData.length > 0 && (
-        <div style={{ padding: "6px 20px 0", display: "flex", gap: 3, overflowX: "auto",
-          scrollbarWidth: "none", flexWrap: "nowrap" }}>
-          {roundData.map((rd, rIdx) => {
-            const isComplete  = rIdx < completedCount;
-            const isCurrent   = rIdx === curRound;
-            const isLocked    = rIdx > completedCount;
-            const isNext      = rIdx === completedCount && !isComplete;
-            const tipText     = isComplete
-              ? `R${rIdx + 1}  ·  α = ${rd.alpha}  ·  ε = ${(rd.error * 100).toFixed(1)}%`
-              : isLocked ? `R${rIdx + 1} — locked (complete previous rounds first)` : `R${rIdx + 1}`;
-            return (
-              <button
-                key={rIdx}
-                title={tipText}
-                disabled={isLocked}
-                onDoubleClick={() => {
-                  if (isLocked) return;
-                  instantComplete(rIdx);
-                  setCompletedCount(c => Math.max(c, rIdx + 1));
-                  setCurRound(rIdx);
-                  setRoundPhase(5);
-                  setWeightDisplayMode("output");
-                }}
-                onClick={() => {
-                  if (isLocked) return;
-                  setCurRound(rIdx);
-                  if (isComplete) { setRoundPhase(5); setWeightDisplayMode("output"); }
-                }}
-                style={{
-                  padding: "3px 8px", borderRadius: 20, border: "none",
-                  cursor: isLocked ? "not-allowed" : "pointer",
-                  fontSize: 10, fontWeight: isCurrent ? 700 : 400,
-                  fontFamily: "'JetBrains Mono',monospace",
-                  background: isCurrent
-                    ? (isComplete ? `${C.green}28` : `${C.accent}28`)
-                    : "rgba(255,255,255,0.04)",
-                  color: isLocked ? C.dimmer
-                    : isCurrent ? (isComplete ? C.green : C.accent)
-                    : isComplete ? C.green : isNext ? C.text : C.dimmer,
-                  boxShadow: isCurrent
-                    ? `inset 0 0 0 1px ${isComplete ? C.green : C.accent}55`
-                    : "inset 0 0 0 1px rgba(255,255,255,0.06)",
-                  opacity: isLocked ? 0.3 : 1,
-                  transition: "background 0.15s, color 0.15s, box-shadow 0.15s",
-                  whiteSpace: "nowrap", flexShrink: 0, lineHeight: 1.4,
-                }}
-                onMouseEnter={e => { if (!isLocked) e.currentTarget.style.background = isCurrent ? (isComplete ? `${C.green}40` : `${C.accent}40`) : "rgba(255,255,255,0.09)"; }}
-                onMouseLeave={e => { e.currentTarget.style.background = isCurrent ? (isComplete ? `${C.green}28` : `${C.accent}28`) : "rgba(255,255,255,0.04)"; }}
-              >
-                {isComplete ? `✓ R${rIdx + 1}` : `R${rIdx + 1}`}
-              </button>
-            );
-          })}
-        </div>
-      )}
+      {roundData.length > 0 && (() => {
+        // Compute selection overlay rect from tab DOM refs
+        let selRect = null;
+        if (dragRange !== null && tabScrollRef.current) {
+          const containerRect = tabScrollRef.current.getBoundingClientRect();
+          const lo = Math.min(dragRange.start, dragRange.end);
+          const hi = Math.max(dragRange.start, dragRange.end);
+          const startEl = tabRefs.current[lo];
+          const endEl   = tabRefs.current[hi];
+          if (startEl && endEl) {
+            const sR = startEl.getBoundingClientRect();
+            const eR = endEl.getBoundingClientRect();
+            selRect = {
+              left:   sR.left  - containerRect.left - 4,
+              top:    sR.top   - containerRect.top  - 4,
+              width:  eR.right - sR.left + 8,
+              height: sR.height + 8,
+            };
+          }
+        }
+        return (
+          <div style={{ padding: "6px 20px 0", position: "relative" }}>
+            {selRect && (
+              <div style={{
+                position: "absolute",
+                left: selRect.left + 20, // account for 20px padding
+                top:  selRect.top  + 6,  // account for 6px padding
+                width: selRect.width, height: selRect.height,
+                border: `1.5px dashed ${C.accent}`,
+                borderRadius: 10, pointerEvents: "none", zIndex: 10,
+                boxShadow: `0 0 8px ${C.accent}33`,
+              }} />
+            )}
+            <div ref={tabScrollRef} style={{
+              display: "flex", gap: 3, overflowX: "auto",
+              scrollbarWidth: "none", flexWrap: "nowrap",
+              cursor: dragRange !== null ? "grabbing" : "default",
+            }}>
+              {roundData.map((rd, rIdx) => {
+                const isComplete  = rIdx < completedCount;
+                const isCurrent   = rIdx === curRound;
+                const isLocked    = rIdx > completedCount;
+                const isNext      = rIdx === completedCount && !isComplete;
+                const canDrag     = !isLocked && !growing && !buildProgress;
+                const inSel       = dragRange !== null
+                  && rIdx >= Math.min(dragRange.start, dragRange.end)
+                  && rIdx <= Math.max(dragRange.start, dragRange.end);
+                return (
+                  <button
+                    key={rIdx}
+                    ref={el => { tabRefs.current[rIdx] = el; }}
+                    onDoubleClick={() => {
+                      if (isLocked || tabDragRef.current.moved) return;
+                      setHintDismissed(true);
+                      instantComplete(rIdx);
+                      setCompletedCount(c => Math.max(c, rIdx + 1));
+                      setCurRound(rIdx);
+                      setRoundPhase(5);
+                      setWeightDisplayMode("output");
+                    }}
+                    onClick={() => {
+                      if (isLocked || tabDragRef.current.moved) return;
+                      setCurRound(rIdx);
+                      if (isComplete) { setRoundPhase(5); setWeightDisplayMode("output"); }
+                    }}
+                    onMouseDown={e => {
+                      // Drag can only start from a completed or current round
+                      if (isLocked || growing || buildProgress) return;
+                      e.preventDefault();
+                      tabDragRef.current = { active: true, startIdx: rIdx, endIdx: rIdx, moved: false };
+                      setDragRange({ start: rIdx, end: rIdx });
+                      setTabTooltip(null);
+                    }}
+                    onMouseEnter={e => {
+                      if (tabDragRef.current.active) {
+                        // Extend drag to any round (including locked future rounds)
+                        tabDragRef.current.endIdx = rIdx;
+                        tabDragRef.current.moved  = rIdx !== tabDragRef.current.startIdx;
+                        setDragRange({ start: tabDragRef.current.startIdx, end: rIdx });
+                      } else if (!isLocked) {
+                        const r = e.currentTarget.getBoundingClientRect();
+                        setTabTooltip(tooltipPosition(r, { prefer: 'below', gap: 6, width: 240, height: 28 }));
+                        e.currentTarget.style.background = isCurrent
+                          ? (isComplete ? `${C.green}40` : `${C.accent}40`)
+                          : "rgba(255,255,255,0.09)";
+                      }
+                    }}
+                    onMouseLeave={e => {
+                      if (!tabDragRef.current.active) {
+                        setTabTooltip(null);
+                        e.currentTarget.style.background = isCurrent
+                          ? (isComplete ? `${C.green}28` : `${C.accent}28`)
+                          : "rgba(255,255,255,0.04)";
+                      }
+                    }}
+                    style={{
+                      padding: "3px 8px", borderRadius: 20, border: "none",
+                      cursor: isLocked ? "default" : dragRange !== null ? "grabbing" : "pointer",
+                      fontSize: 10, fontWeight: isCurrent ? 700 : 400,
+                      fontFamily: "'JetBrains Mono',monospace",
+                      background: isCurrent
+                        ? (isComplete ? `${C.green}28` : `${C.accent}28`)
+                        : inSel ? `${C.accent}18`
+                        : "rgba(255,255,255,0.04)",
+                      color: isLocked ? C.dimmer
+                        : isCurrent ? (isComplete ? C.green : C.accent)
+                        : isComplete ? C.green : isNext ? C.text : C.dimmer,
+                      boxShadow: isCurrent
+                        ? `inset 0 0 0 1px ${isComplete ? C.green : C.accent}55`
+                        : "inset 0 0 0 1px rgba(255,255,255,0.06)",
+                      opacity: isLocked ? 0.3 : 1,
+                      transition: "background 0.15s, color 0.15s, box-shadow 0.15s",
+                      whiteSpace: "nowrap", flexShrink: 0, lineHeight: 1.4,
+                      userSelect: "none",
+                    }}
+                  >
+                    {isComplete ? `✓ R${rIdx + 1}` : `R${rIdx + 1}`}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── Phase indicator ─────────────────────────────────────────────────── */}
       {roundPhase >= 0 && roundData.length > 0 && (
@@ -1203,8 +1377,14 @@ export default function AdaBoostViz() {
           {/* Reset — single click: current round · double click: all rounds */}
           <button
             disabled={growing}
-            onMouseEnter={e => setResetTooltip(tooltipPosition(e.currentTarget.getBoundingClientRect(), { prefer: 'above', width: 278, height: 28 }))}
-            onMouseLeave={() => setResetTooltip(null)}
+            onMouseEnter={e => {
+              setResetTooltip(tooltipPosition(e.currentTarget.getBoundingClientRect(), { prefer: 'above', width: 278, height: 28 }));
+              if (!growing) { e.currentTarget.style.background = "rgba(255,255,255,0.09)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.18)"; e.currentTarget.style.color = C.text; }
+            }}
+            onMouseLeave={e => {
+              setResetTooltip(null);
+              e.currentTarget.style.background = "rgba(255,255,255,0.04)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.08)"; e.currentTarget.style.color = growing ? C.dimmer : C.dim;
+            }}
             onClick={() => {
               if (resetClickRef.current) return;
               resetClickRef.current = setTimeout(() => {
@@ -1229,9 +1409,7 @@ export default function AdaBoostViz() {
               color: growing ? C.dimmer : C.dim, cursor: growing ? "default" : "pointer",
               fontFamily: "inherit", opacity: growing ? 0.4 : 1,
               transition: "background 0.15s, border-color 0.15s, color 0.15s",
-            }}
-            onMouseEnter={e => { if (!growing) { e.currentTarget.style.background = "rgba(255,255,255,0.09)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.18)"; e.currentTarget.style.color = C.text; } }}
-            onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.04)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.08)"; e.currentTarget.style.color = growing ? C.dimmer : C.dim; }}>
+            }}>
             Reset
           </button>
         </div>
@@ -1265,13 +1443,13 @@ export default function AdaBoostViz() {
               <>
                 <WeightChart
                   weights={displayWeights}
-                  sortWeights={currentRoundData?.weightsInput}
                   classColors={sampleClassColors}
                   predCorrect={predCorrect}
                   showPredColors={roundPhase >= 2}
                   maxH={120}
                 />
-                <div style={{ marginTop: 6, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                {/* Legend: class colors normally, correct/misclassified during predictions phase */}
+                <div style={{ marginTop: 5, display: "flex", gap: 10, flexWrap: "wrap" }}>
                   {roundPhase >= 2 ? (
                     <>
                       <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 8, color: C.dim }}>
@@ -1288,17 +1466,18 @@ export default function AdaBoostViz() {
                     </div>
                   ))}
                 </div>
-                {currentRoundData && roundPhase >= 2 && (
-                  <div style={{ marginTop: 6, fontSize: 8, color: C.dim }}>
-                    <span style={{ color: C.green }}>{currentRoundData.misclassified.filter(m => !m).length} correct</span>
-                    {" · "}
-                    <span style={{ color: C.red }}>{currentRoundData.misclassified.filter(m => m).length} misclassified</span>
-                  </div>
-                )}
+                {/* Summary stats */}
                 {roundPhase >= 5 && currentRoundData && (() => {
                   const avgW = 1 / activeData.length;
-                  const aboveAvg = currentRoundData.weightsOutput.filter(w => w > avgW).length;
-                  return <div style={{ marginTop: 4, fontSize: 8, color: C.dim }}>{aboveAvg} samples above avg weight</div>;
+                  const w    = currentRoundData.weightsOutput;
+                  const aboveAvg = w.filter(v => v > avgW).length;
+                  const maxWVal  = Math.max(...w);
+                  return (
+                    <div style={{ marginTop: 4, fontSize: 8, color: C.dim, lineHeight: 1.7 }}>
+                      {aboveAvg} samples above avg weight
+                      <span style={{ marginLeft: 8, color: C.dimmer }}>max = {fmtWeight(maxWVal)}</span>
+                    </div>
+                  );
                 })()}
               </>
             ) : (
@@ -1615,6 +1794,36 @@ export default function AdaBoostViz() {
                         )}
                       </div>
                     )}
+                  </div>
+                );
+              })()}
+
+              {/* Phase 1: Leaf batch summary */}
+              {roundPhase === 1 && currentStep?.isLeafBatch && (() => {
+                const parentNode = allNodes.find(n => n.id === currentStep.parentSplitId);
+                const leafNodes  = (currentStep.commitIds ?? []).map(id => allNodes.find(n => n.id === id)).filter(Boolean);
+                if (!parentNode) return null;
+                return (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingRight: 10, paddingLeft: 6 }}>
+                    <div style={{ padding: "6px 9px", borderRadius: 8, background: `${C.green}12`,
+                      border: `1px solid ${C.green}33`, fontSize: 8.5, color: C.green }}>
+                      ✓ Split on {activeFeatures[parentNode.featureIndex]} ≤ {fmtThresh(parentNode.threshold)}
+                      <br /><span style={{ opacity: 0.75 }}>Weighted Gini = {parentNode.gini?.toFixed(4)}</span>
+                    </div>
+                    <div style={{ fontSize: 8.5, color: C.dim }}>Leaf predictions:</div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                      {leafNodes.map((leaf, i) => {
+                        const pred = leaf.prediction;
+                        const col  = pred === roundData[curRound]?.classes?.[0] ? C.blue : C.leafB;
+                        return (
+                          <div key={i} style={{ padding: "5px 9px", borderRadius: 8,
+                            background: `${col}12`, border: `1px solid ${col}33`,
+                            fontSize: 9, color: col, fontFamily: "'JetBrains Mono',monospace" }}>
+                            {i === 0 ? "Left" : "Right"}: {pred} <span style={{ opacity: 0.6 }}>n={leaf.samples}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 );
               })()}
@@ -2056,6 +2265,26 @@ export default function AdaBoostViz() {
           whiteSpace: "nowrap",
         }}>
           Click to reset current round · Double-click to reset all
+        </div>
+      )}
+
+      {/* Round tab tooltip */}
+      {tabTooltip && !dragRange && (
+        <div style={{
+          position: "fixed",
+          left: tabTooltip.left,
+          top: tabTooltip.top,
+          zIndex: 9999,
+          background: "#1a2235",
+          borderRadius: 7,
+          padding: "5px 10px",
+          fontSize: 9,
+          color: C.dim,
+          boxShadow: "0 4px 16px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(255,255,255,0.07)",
+          pointerEvents: "none",
+          whiteSpace: "nowrap",
+        }}>
+          Double-click to instantly complete this round
         </div>
       )}
     </div>

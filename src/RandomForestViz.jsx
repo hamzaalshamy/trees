@@ -1167,8 +1167,12 @@ export default function RandomForestViz({ mode = "random-forest" }) {
             disabled={growing}
             onMouseEnter={e => {
               setResetTooltip(tooltipPosition(e.currentTarget.getBoundingClientRect(), { prefer: 'above', width: 272, height: 28 }));
+              if (!growing) e.currentTarget.style.background = "#1e2840";
             }}
-            onMouseLeave={() => setResetTooltip(null)}
+            onMouseLeave={e => {
+              setResetTooltip(null);
+              e.currentTarget.style.background = "#161c2a";
+            }}
             onClick={() => {
               if (resetClickRef.current) return;
               resetClickRef.current = setTimeout(() => {
@@ -1183,9 +1187,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
               setTreeStates({});
               setCurTree(0);
             }}
-            style={{ ...inp, cursor: growing ? "default" : "pointer", padding: "3px 10px", fontSize: 10, opacity: growing ? 0.3 : 1, transition: "background 0.15s" }}
-            onMouseEnter={e => { if (!growing) e.currentTarget.style.background = "#1e2840"; }}
-            onMouseLeave={e => { e.currentTarget.style.background = "#161c2a"; }}>
+            style={{ ...inp, cursor: growing ? "default" : "pointer", padding: "3px 10px", fontSize: 10, opacity: growing ? 0.3 : 1, transition: "background 0.15s" }}>
             Reset
           </button>
         </div>

@@ -1206,13 +1206,14 @@ export default function AdaBoostViz() {
           )}
 
           <button disabled={!roundData.length || growing || buildProgress} onClick={growAllInstant}
-            style={{ padding: "7px 14px", borderRadius: 8, border: `1px solid ${C.border}`,
-              background: "transparent", color: C.dim, fontSize: 11, fontFamily: "inherit",
+            style={{ padding: "7px 18px", borderRadius: 8, border: "none",
+              background: !roundData.length || growing || buildProgress ? C.border : `linear-gradient(135deg,${C.accent},#d97706)`,
+              color: !roundData.length || growing || buildProgress ? C.dim : "#000",
+              fontSize: 11, fontFamily: "inherit",
               cursor: !roundData.length || growing || buildProgress ? "default" : "pointer",
-              opacity: !roundData.length || growing || buildProgress ? 0.4 : 1,
-              transition: "color 0.15s, border-color 0.15s" }}
-            onMouseEnter={e => { if (!(!roundData.length || growing || buildProgress)) { e.currentTarget.style.color = C.text; e.currentTarget.style.borderColor = C.dim; } }}
-            onMouseLeave={e => { e.currentTarget.style.color = C.dim; e.currentTarget.style.borderColor = C.border; }}>
+              fontWeight: 600, transition: "box-shadow 0.15s, filter 0.15s" }}
+            onMouseEnter={e => { if (!(!roundData.length || growing || buildProgress)) { e.currentTarget.style.boxShadow = "0 0 12px rgba(245,158,11,0.3)"; e.currentTarget.style.filter = "brightness(1.1)"; } }}
+            onMouseLeave={e => { e.currentTarget.style.boxShadow = "none"; e.currentTarget.style.filter = "none"; }}>
             Complete All
           </button>
         </div>

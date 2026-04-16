@@ -1,19 +1,21 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { usePageNavigate } from "./PageTransition";
 import { C } from "./theme";
 import GlobalHeader from "./GlobalHeader";
+import { tooltipPosition } from "./tooltipUtils";
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
-const VBW = 1060;
+const VBW = 1320;
 const VBH = 510;
 
 const POS = {
-  "Decision Tree":     { cx: 530, cy: 80 },
-  "Bagging":           { cx: 200, cy: 250 },
-  "Boosting":          { cx: 860, cy: 250 },
-  "Random Forest":     { cx: 200, cy: 430 },
-  "AdaBoost":          { cx: 710, cy: 430 },
+  "Decision Tree":     { cx: 660, cy: 80  },
+  "Bagging":           { cx: 310, cy: 250 },
+  "Boosting":          { cx: 1010, cy: 250 },
+  "Random Forest":     { cx: 310, cy: 430 },
+  "AdaBoost":          { cx: 810, cy: 430 },
   "Gradient Boosting": { cx: 1010, cy: 430 },
+  "XGBoost":           { cx: 1210, cy: 430 },
 };
 
 const NODE_INFO = {
@@ -50,23 +52,47 @@ const NODE_INFO = {
     filterId: "glow-green",
     sublabel: "+ feature subsets",
   },
+  "AdaBoost": {
+    desc: [
+      "Adaptive Boosting — trains weak learners sequentially, each correcting the last.",
+      "Misclassified samples gain higher weight so the next tree focuses on them.",
+      "Final prediction is a weighted vote: higher-accuracy trees get more say.",
+    ],
+    route: "/adaboost",
+    color: C.purple,
+    filterId: "glow-purple",
+    sublabel: "weighted voting",
+  },
 };
 
-const GRAY_NODES = ["Boosting", "AdaBoost", "Gradient Boosting"];
+const GRAY_NODES = ["Gradient Boosting", "XGBoost"];
+
+const GRAY_NODE_TOOLTIPS = {
+  "Gradient Boosting": "Would require a fundamentally different visualization approach. May be added in the future.",
+  "XGBoost":           "Would require a fundamentally different visualization approach. May be added in the future.",
+};
+
+const MUTED_NODES = ["Boosting"];
+const MUTED_NODE_INFO = {
+  "Boosting": {
+    sublabel: "sequential ensemble family",
+    tooltip: "Boosting is a family of sequential ensemble methods where each tree corrects the previous one's mistakes. Click AdaBoost below to see it in action.",
+  },
+};
 
 const COMING_SOON_DESC = {
-  "Boosting":           "Boosting — sequential ensemble methods where each tree corrects the previous one's mistakes.",
-  "AdaBoost":           "AdaBoost — watch misclassified samples gain weight as each weak learner focuses on harder examples.",
   "Gradient Boosting":  "Gradient Boosting — may be added in the future. Requires visualizing residual fitting, a fundamentally different approach.",
+  "XGBoost":            "XGBoost — an optimized version of Gradient Boosting with built-in regularization. May be added in the future.",
 };
 
 // Edge definitions: { from, to, label, grayed, delay }
 const EDGES = [
   { from: "Decision Tree", to: "Bagging",           label: "+ bootstrap",          grayed: false, delay: 0.25 },
-  { from: "Decision Tree", to: "Boosting",          label: "+ sequential fitting",  grayed: true,  delay: 0.25 },
+  { from: "Decision Tree", to: "Boosting",          label: "+ sequential fitting",  grayed: false, delay: 0.25 },
   { from: "Bagging",       to: "Random Forest",     label: "+ feature subsampling", grayed: false, delay: 0.65 },
-  { from: "Boosting",      to: "AdaBoost",           label: null,                   grayed: true,  delay: 0.65 },
+  { from: "Boosting",      to: "AdaBoost",           label: null,                   grayed: false, delay: 0.65 },
   { from: "Boosting",      to: "Gradient Boosting",  label: null,                   grayed: true,  delay: 0.65 },
+  { from: "Boosting",      to: "XGBoost",            label: null,                   grayed: true,  delay: 0.65 },
 ];
 
 
@@ -77,6 +103,7 @@ const NODE_DELAYS = {
   "Random Forest":     0.85,
   "AdaBoost":          0.85,
   "Gradient Boosting": 0.85,
+  "XGBoost":           0.85,
 };
 
 // ─── Sub-components ─────────────────────────────────────────────────────────────
@@ -87,7 +114,7 @@ function AnimEdge({ x1, y1, x2, y2, label, grayed, delay, hovered }) {
   const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
   const dx = x2 - x1, dy = y2 - y1;
   const nx = -dy / len, ny = dx / len;
-  const labelX = mx + nx * 14, labelY = my + ny * 14;
+  const labelX = mx + nx * 14, labelY = my - Math.abs(ny) * 14;
 
   return (
     <g opacity={grayed ? 0.35 : (hovered ? 1 : 0.85)} style={{ transition: "opacity 0.2s" }}>
@@ -183,7 +210,7 @@ function ActiveNode({ label, onHover, onHoverEnd, onClick, animDelay }) {
   );
 }
 
-function GrayNode({ label, onComingSoon, animDelay }) {
+function GrayNode({ label, onComingSoon, onHover, onHoverEnd, animDelay }) {
   const { cx, cy } = POS[label];
   const [localHovered, setLocalHovered] = useState(false);
   const w = 154, h = 44;
@@ -193,8 +220,9 @@ function GrayNode({ label, onComingSoon, animDelay }) {
   return (
     <g
       onClick={() => onComingSoon(label)}
-      onMouseEnter={() => setLocalHovered(true)}
-      onMouseLeave={() => setLocalHovered(false)}
+      onMouseEnter={(e) => { setLocalHovered(true); onHover?.(label, e.clientX, e.clientY); }}
+      onMouseLeave={() => { setLocalHovered(false); onHoverEnd?.(); }}
+      onMouseMove={(e) => onHover?.(label, e.clientX, e.clientY)}
       style={{
         cursor: "pointer",
         opacity: 0,
@@ -223,6 +251,57 @@ function GrayNode({ label, onComingSoon, animDelay }) {
         style={{ transition: "fill 0.12s" }}
       >
         {label}
+      </text>
+    </g>
+  );
+}
+
+function MutedNode({ label, onHover, onHoverEnd, animDelay }) {
+  const { cx, cy } = POS[label];
+  const { sublabel } = MUTED_NODE_INFO[label];
+  const [localHovered, setLocalHovered] = useState(false);
+  const w = 154, h = 44;
+
+  return (
+    <g
+      onMouseEnter={(e) => { setLocalHovered(true); onHover(label, e.clientX, e.clientY); }}
+      onMouseLeave={() => { setLocalHovered(false); onHoverEnd(); }}
+      onMouseMove={(e) => onHover(label, e.clientX, e.clientY)}
+      style={{
+        cursor: "default",
+        opacity: 0,
+        animation: `taxFadeIn 0.4s ease ${animDelay}s forwards`,
+        transformOrigin: `${cx}px ${cy}px`,
+      }}
+    >
+      <rect
+        x={cx - w / 2} y={cy - h / 2}
+        width={w} height={h} rx={8}
+        fill={localHovered ? "#1a1630" : C.panel}
+        stroke={localHovered ? `${C.purple}cc` : `${C.purple}66`}
+        strokeWidth={localHovered ? 1.8 : 1.4}
+        style={{ transition: "fill 0.15s, stroke 0.15s, stroke-width 0.15s" }}
+      />
+      <text
+        x={cx} y={cy - 4}
+        textAnchor="middle"
+        fill={localHovered ? C.purple : `${C.purple}99`}
+        fontSize={11.5}
+        fontFamily="'JetBrains Mono',monospace"
+        fontWeight={600}
+        style={{ transition: "fill 0.15s" }}
+      >
+        {label}
+      </text>
+      <text
+        x={cx} y={cy + 12}
+        textAnchor="middle"
+        fill={localHovered ? C.dim : C.dimmer}
+        fontSize={9}
+        fontFamily="'JetBrains Mono',monospace"
+        style={{ transition: "fill 0.15s" }}
+      >
+        {sublabel}
       </text>
     </g>
   );
@@ -274,8 +353,10 @@ function IconUpload() {
 
 // ─── Main component ─────────────────────────────────────────────────────────────
 export default function TaxonomyMenu() {
-  const navigate = useNavigate();
-  const [tooltip, setTooltip]           = useState(null); // { label, x, y } screen coords
+  const navigate = usePageNavigate();
+  const [tooltip, setTooltip]           = useState(null); // { label, top, left } for active nodes
+  const [mutedTooltip, setMutedTooltip] = useState(null); // { label, top, left } for muted nodes
+  const [grayTooltip,  setGrayTooltip]  = useState(null); // { label, top, left } for gray nodes
   const [comingSoon, setComingSoon]     = useState(null); // label of clicked gray node
   const [dragOver, setDragOver]         = useState(false);
   const [cardsVisible, setCardsVisible] = useState(false);
@@ -327,11 +408,34 @@ export default function TaxonomyMenu() {
   }, [handleFile]);
 
   const handleHover = useCallback((label, x, y) => {
-    setTooltip({ label, x, y });
+    // Treat the cursor as a zero-size rect and place the tooltip to the right
+    const cursorRect = { left: x, top: y, right: x, bottom: y, width: 0, height: 0 };
+    const pos = tooltipPosition(cursorRect, { prefer: 'right', gap: 18, width: 242, height: 160 });
+    setTooltip({ label, ...pos });
   }, []);
 
   const handleHoverEnd = useCallback(() => {
     setTooltip(null);
+  }, []);
+
+  const handleMutedHover = useCallback((label, x, y) => {
+    const cursorRect = { left: x, top: y, right: x, bottom: y, width: 0, height: 0 };
+    const pos = tooltipPosition(cursorRect, { prefer: 'right', gap: 18, width: 262, height: 90 });
+    setMutedTooltip({ label, ...pos });
+  }, []);
+
+  const handleMutedHoverEnd = useCallback(() => {
+    setMutedTooltip(null);
+  }, []);
+
+  const handleGrayHover = useCallback((label, x, y) => {
+    const cursorRect = { left: x, top: y, right: x, bottom: y, width: 0, height: 0 };
+    const pos = tooltipPosition(cursorRect, { prefer: 'right', gap: 18, width: 242, height: 60 });
+    setGrayTooltip({ label, ...pos });
+  }, []);
+
+  const handleGrayHoverEnd = useCallback(() => {
+    setGrayTooltip(null);
   }, []);
 
   // Scroll-in animation for How it Works cards — fires once, then disconnects
@@ -432,6 +536,9 @@ export default function TaxonomyMenu() {
             <filter id="glow-green" x="-80%" y="-80%" width="260%" height="260%">
               <feDropShadow dx="0" dy="0" stdDeviation="9" floodColor={C.green} floodOpacity="0.65" />
             </filter>
+            <filter id="glow-purple" x="-80%" y="-80%" width="260%" height="260%">
+              <feDropShadow dx="0" dy="0" stdDeviation="9" floodColor={C.purple} floodOpacity="0.65" />
+            </filter>
             <style>{`
               @keyframes taxDrawEdge { to { stroke-dashoffset: 0; } }
               @keyframes taxFadeIn   { from { opacity: 0; } to { opacity: 1; } }
@@ -467,6 +574,17 @@ export default function TaxonomyMenu() {
             />
           ))}
 
+          {/* Muted nodes (family headers — not clickable, not grayed) */}
+          {MUTED_NODES.map((label) => (
+            <MutedNode
+              key={label}
+              label={label}
+              animDelay={NODE_DELAYS[label]}
+              onHover={handleMutedHover}
+              onHoverEnd={handleMutedHoverEnd}
+            />
+          ))}
+
           {/* Gray nodes */}
           {GRAY_NODES.map((label) => (
             <GrayNode
@@ -474,23 +592,25 @@ export default function TaxonomyMenu() {
               label={label}
               animDelay={NODE_DELAYS[label]}
               onComingSoon={setComingSoon}
+              onHover={handleGrayHover}
+              onHoverEnd={handleGrayHoverEnd}
             />
           ))}
         </svg>
 
-        {/* Hover tooltip */}
+        {/* Hover tooltip — active nodes */}
         {tooltip && NODE_INFO[tooltip.label] && (
           <div
             style={{
               position: "fixed",
-              left: Math.min(tooltip.x + 18, (typeof window !== "undefined" ? window.innerWidth : 1200) - 260),
-              top: Math.max(tooltip.y - 110, 8),
+              left: tooltip.left,
+              top: tooltip.top,
               width: 242,
               background: "#141b2d",
               borderRadius: 12,
               padding: "13px 15px",
               pointerEvents: "none",
-              zIndex: 100,
+              zIndex: 9999,
               boxShadow: `0 12px 40px rgba(0,0,0,0.7), inset 0 0 0 1px rgba(255,255,255,0.08)`,
             }}
           >
@@ -504,6 +624,54 @@ export default function TaxonomyMenu() {
             ))}
             <div style={{ marginTop: 10, fontSize: 10, color: NODE_INFO[tooltip.label].color, opacity: 0.8 }}>
               Click to open →
+            </div>
+          </div>
+        )}
+
+        {/* Hover tooltip — gray (coming soon) nodes */}
+        {grayTooltip && GRAY_NODE_TOOLTIPS[grayTooltip.label] && (
+          <div style={{
+            position: "fixed",
+            left: grayTooltip.left,
+            top: grayTooltip.top,
+            width: 242,
+            background: "#141b2d",
+            borderRadius: 12,
+            padding: "13px 15px",
+            pointerEvents: "none",
+            zIndex: 9999,
+            boxShadow: "0 12px 40px rgba(0,0,0,0.7), inset 0 0 0 1px rgba(255,255,255,0.08)",
+          }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: C.dim, marginBottom: 8 }}>
+              {grayTooltip.label}
+            </div>
+            <div style={{ fontSize: 10, color: C.text, opacity: 0.7, lineHeight: 1.65 }}>
+              {GRAY_NODE_TOOLTIPS[grayTooltip.label]}
+            </div>
+          </div>
+        )}
+
+        {/* Hover tooltip — muted family nodes */}
+        {mutedTooltip && MUTED_NODE_INFO[mutedTooltip.label] && (
+          <div
+            style={{
+              position: "fixed",
+              left: mutedTooltip.left,
+              top: mutedTooltip.top,
+              width: 262,
+              background: "#141b2d",
+              borderRadius: 12,
+              padding: "13px 15px",
+              pointerEvents: "none",
+              zIndex: 9999,
+              boxShadow: `0 12px 40px rgba(0,0,0,0.7), inset 0 0 0 1px rgba(255,255,255,0.08)`,
+            }}
+          >
+            <div style={{ fontSize: 11, fontWeight: 700, color: `${C.purple}cc`, marginBottom: 8 }}>
+              {mutedTooltip.label}
+            </div>
+            <div style={{ fontSize: 10, color: C.text, opacity: 0.75, lineHeight: 1.65 }}>
+              {MUTED_NODE_INFO[mutedTooltip.label].tooltip}
             </div>
           </div>
         )}

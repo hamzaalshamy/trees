@@ -1,4 +1,4 @@
-import { useNavigate } from "react-router-dom";
+import { usePageNavigate } from "./PageTransition";
 import { C } from "./theme";
 
 /**
@@ -9,7 +9,7 @@ import { C } from "./theme";
  *   infoBar – ReactNode rendered as a second row below the main bar (algorithm pages)
  */
 export default function GlobalHeader({ right, infoBar }) {
-  const navigate = useNavigate();
+  const navigate = usePageNavigate();
 
   return (
     <div

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { useLocation } from "react-router-dom";
 import Papa from "papaparse";
 import { C } from "./theme";
@@ -8,6 +9,10 @@ import { musicData, musicMeta } from "./data/musicData";
 import { salaryData, salaryMeta } from "./data/salary";
 import { predictRow } from "./cartAlgorithm";
 import TreeWorker from "./treeWorker.js?worker";
+import DataModal from "./DataModal";
+import { NA_VALS, detectNAs, detectTaskType } from "./dataUtils";
+import { classColor, flattenNodes, getTreePrediction, fmtThresh, LEAF_SPACING, X_PAD, Y_GAP, computeTreeWidth, computePositions, formatRegVal, getSamplePath, formatSampleLabel, PATH_COLOR, Edge, TreeNode } from "./TreeComponents";
+import { tooltipPosition } from "./tooltipUtils";
 
 // ─── Feature-subset options ────────────────────────────────────────────────────
 const FEATURE_SUBSET_OPTIONS = {
@@ -16,294 +21,6 @@ const FEATURE_SUBSET_OPTIONS = {
   half: { label: "p/2",       fn: (p) => Math.max(1, Math.round(p / 2)) },
   all:  { label: "p (all)",   fn: (p) => p },
 };
-
-// ─── Class color palette ───────────────────────────────────────────────────────
-// Index 0 = blue, index 1 = pink — preserves binary heart-disease appearance.
-// For 3+ classes the remaining slots provide visually distinct hues.
-const CLASS_PALETTE = [
-  C.blue, C.leafB, C.green, C.accent, C.purple,
-  "#06b6d4", "#f472b6", "#84cc16", "#fb923c", "#a3e635",
-];
-
-function classColor(cls, allClasses) {
-  const idx = allClasses.indexOf(cls);
-  return idx >= 0 ? CLASS_PALETTE[idx % CLASS_PALETTE.length] : C.dim;
-}
-
-// ─── Tree helpers ──────────────────────────────────────────────────────────────
-function flattenNodes(node, id = "0") {
-  node.id = id;
-  const nodes = [node];
-  if (node.type === "split") {
-    nodes.push(...flattenNodes(node.left,  id + "L"));
-    nodes.push(...flattenNodes(node.right, id + "R"));
-  }
-  return nodes;
-}
-
-// Aggregate across all leaves: majority class (classification) or weighted mean (regression).
-function getTreePrediction(node) {
-  const leaves = flattenNodes(node).filter(n => n.type === "leaf");
-  if (!leaves.length) return "?";
-  // Regression: weighted mean of leaf means
-  if (leaves[0].mean !== undefined) {
-    const totalN = leaves.reduce((s, l) => s + l.samples, 0);
-    return totalN > 0 ? leaves.reduce((s, l) => s + l.mean * l.samples, 0) / totalN : 0;
-  }
-  // Classification: majority class
-  const totals = {};
-  leaves.forEach(l => {
-    Object.entries(l.classCounts ?? {}).forEach(([cls, cnt]) => {
-      totals[cls] = (totals[cls] ?? 0) + cnt;
-    });
-  });
-  return Object.entries(totals).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "?";
-}
-
-// Format a split threshold for display on edges: 3 dp for small values, fewer for large.
-function fmtThresh(v) {
-  if (v == null) return "?";
-  const abs = Math.abs(v);
-  if (abs >= 1000) return v.toFixed(0);
-  if (abs >= 10)   return v.toFixed(1);
-  if (abs >= 1)    return v.toFixed(2);
-  return v.toFixed(3);
-}
-
-// Count actual leaf nodes so width scales with real tree shape, not worst-case depth.
-function countLeaves(node) {
-  if (!node || node.type === "leaf") return 1;
-  return countLeaves(node.left) + countLeaves(node.right);
-}
-
-const LEAF_SPACING = 130; // px between leaf centres
-const X_PAD = 30;         // left/right margin
-const Y_GAP = 90;         // vertical distance between depth levels
-
-function computeTreeWidth(node) {
-  return X_PAD * 2 + countLeaves(node) * LEAF_SPACING;
-}
-
-// Positions each node so horizontal space is proportional to its subtree's leaf count.
-// This prevents exponential width blow-up at deep depths.
-function computePositions(node) {
-  const pos = {};
-  function layout(n, leafOffset, depth) {
-    const leaves = countLeaves(n);
-    pos[n.id] = { x: X_PAD + (leafOffset + leaves / 2) * LEAF_SPACING, y: 40 + depth * Y_GAP };
-    if (n.type === "split") {
-      const lLeaves = countLeaves(n.left);
-      layout(n.left,  leafOffset,           depth + 1);
-      layout(n.right, leafOffset + lLeaves, depth + 1);
-    }
-  }
-  layout(node, 0, 0);
-  return pos;
-}
-
-// Split a feature name into up to 2 lines for SVG rendering.
-// Returns { line1, line2 } where line2 may be null.
-function splitFeatureName(name, maxChars = 22) {
-  if (name.length <= maxChars) return { line1: name, line2: null };
-  // Try to break at a word boundary near the midpoint
-  const mid = Math.floor(name.length / 2);
-  let breakAt = -1;
-  for (let d = 0; d <= mid; d++) {
-    if (name[mid - d] === " ") { breakAt = mid - d; break; }
-    if (name[mid + d] === " ") { breakAt = mid + d; break; }
-  }
-  if (breakAt === -1) {
-    // No space found — hard-split at maxChars
-    let l1 = name.slice(0, maxChars);
-    let l2 = name.slice(maxChars);
-    if (l2.length > maxChars) l2 = l2.slice(0, maxChars - 1) + "…";
-    return { line1: l1, line2: l2 };
-  }
-  let line1 = name.slice(0, breakAt);
-  let line2 = name.slice(breakAt + 1);
-  if (line1.length > maxChars) line1 = line1.slice(0, maxChars - 1) + "…";
-  if (line2.length > maxChars) line2 = line2.slice(0, maxChars - 1) + "…";
-  return { line1, line2 };
-}
-
-// Format a regression prediction value compactly for display.
-function formatRegVal(v) {
-  if (v === null || v === undefined || (typeof v === "number" && isNaN(v))) return "?";
-  const abs = Math.abs(v);
-  if (abs >= 1e6)  return v.toLocaleString(undefined, { maximumFractionDigits: 0 });
-  if (abs >= 1000) return v.toLocaleString(undefined, { maximumFractionDigits: 1 });
-  if (abs >= 10)   return v.toFixed(2);
-  return v.toFixed(3);
-}
-
-// Auto-detect whether a target column looks like regression (≥20 unique numeric values).
-function detectTaskType(rawRows, targetCol) {
-  const vals = rawRows.map(r => String(r[targetCol] ?? "").trim());
-  const hasNonNumeric = vals.some(v => v === "" || isNaN(parseFloat(v)));
-  if (hasNonNumeric) return "classification";
-  return new Set(vals).size >= 20 ? "regression" : "classification";
-}
-
-// Returns ordered array of node IDs from root to the leaf a sample lands in.
-function getSamplePath(node, row, features) {
-  const path = [node.id];
-  if (node.type === "leaf") return path;
-  const fname = features[node.featureIndex];
-  const goLeft = row[fname] <= node.threshold;
-  return [...path, ...getSamplePath(goLeft ? node.left : node.right, row, features)];
-}
-
-// Formats a data row as a compact label for the sample dropdown.
-function formatSampleLabel(row, features, idx) {
-  const MAX = 5;
-  const shown = features.slice(0, MAX);
-  const parts = shown.map(f => {
-    const short = f.length > 7 ? f.slice(0, 6) + "…" : f;
-    const v = row[f];
-    return `${short}=${v}`;
-  });
-  const extra = features.length > MAX ? ` +${features.length - MAX} more` : "";
-  return `#${idx + 1}: ${parts.join(" · ")}${extra}`;
-}
-
-// ─── SVG components ────────────────────────────────────────────────────────────
-const PATH_COLOR = "#22d3ee";
-
-function Edge({ p1, p2, visible, label, onPath, sampleActive }) {
-  if (!visible || !p1 || !p2) return null;
-  const highlighted = sampleActive && onPath;
-  const dimmed      = sampleActive && !onPath;
-  // Line endpoints (clear of node circles/boxes)
-  const x1 = p1.x, y1 = p1.y + 27;
-  const x2 = p2.x, y2 = p2.y - 24;
-  // Place label 38% from the parent end — upper portion, clear of child node
-  const lx = x1 + (x2 - x1) * 0.38;
-  const ly = y1 + (y2 - y1) * 0.38;
-  const labelW = label.length * 5.6 + 10;
-  const textCol = highlighted ? PATH_COLOR : C.muted;
-  return (
-    <g style={{ opacity: dimmed ? 0.15 : 1, transition: "opacity .3s" }}>
-      <line x1={x1} y1={y1} x2={x2} y2={y2}
-        stroke={highlighted ? PATH_COLOR : C.edge}
-        strokeWidth={highlighted ? 2.4 : 1.4}
-        strokeDasharray={highlighted ? undefined : "4 2"}
-        style={{ transition: "stroke .25s, stroke-width .25s" }}
-      />
-      {/* Background pill so label is legible over the dashed line */}
-      <rect x={lx - labelW / 2} y={ly - 7} width={labelW} height={13}
-        rx={3} fill={C.bg} opacity={0.88} />
-      <text x={lx} y={ly + 2}
-        textAnchor="middle" dominantBaseline="middle"
-        fill={textCol} fontSize={9} fontFamily="'JetBrains Mono',monospace"
-        fontWeight={highlighted ? 700 : 400}>
-        {label}
-      </text>
-    </g>
-  );
-}
-
-function TreeNode({ node, show, phase, pos, allClasses, onPath, sampleActive, isRegression }) {
-  if (!show || !pos) return null;
-  const { x, y } = pos;
-  const highlighted = sampleActive && onPath;
-  const dimmed      = sampleActive && !onPath;
-
-  // ── Leaf node ─────────────────────────────────────────────────────────────
-  if (node.type === "leaf") {
-    const vis = phase >= 1 ? 1 : 0;
-    const gStyle = { opacity: dimmed ? 0.2 : vis, transition: "opacity .45s ease-out", transformOrigin: `${x}px ${y}px`, animation: vis ? "nodeIn 0.35s ease-out" : "none" };
-
-    // ── Regression leaf ──────────────────────────────────────────────────────
-    if (node.mean !== undefined) {
-      const leafCol = highlighted ? PATH_COLOR : C.blue;
-      const meanStr = formatRegVal(node.mean);
-      const minStr  = node.min != null ? formatRegVal(node.min) : "?";
-      const maxStr  = node.max != null ? formatRegVal(node.max) : "?";
-      return (
-        <g style={gStyle}>
-          <rect x={x - 40} y={y - 26} width={80} height={54} rx={11}
-            fill={C.panel} stroke={highlighted ? PATH_COLOR : `${C.blue}88`}
-            strokeWidth={highlighted ? 2 : 1.4} filter={highlighted ? "url(#path-glow)" : "url(#lg)"} />
-          <text x={x} y={y - 11} textAnchor="middle" fill={leafCol} fontSize={9.5}
-            fontFamily="'JetBrains Mono',monospace" fontWeight={700}>{meanStr}</text>
-          <text x={x} y={y + 3} textAnchor="middle" fill={C.dim} fontSize={7.5}
-            fontFamily="'JetBrains Mono',monospace">n={node.samples}</text>
-          <text x={x} y={y + 16} textAnchor="middle" fill={C.dim} fontSize={7}
-            fontFamily="'JetBrains Mono',monospace">{minStr}–{maxStr}</text>
-        </g>
-      );
-    }
-
-    // ── Classification leaf ──────────────────────────────────────────────────
-    const predColor  = classColor(node.prediction, allClasses);
-    const displayLabel = typeof node.prediction === "string" && node.prediction.length > 11
-      ? node.prediction.slice(0, 10) + "…" : String(node.prediction);
-    const leafStroke = highlighted ? PATH_COLOR : `${predColor}88`;
-    const leafFilter = highlighted ? "url(#path-glow)" : "url(#lg)";
-
-    const BAR_W = 56, barX0 = x - 28;
-    let xCursor = barX0;
-    const barSegs = allClasses.map(cls => {
-      const count = node.classCounts?.[cls] ?? 0;
-      const w = node.samples > 0 ? Math.max(0, (count / node.samples) * BAR_W) : 0;
-      const rx = xCursor; xCursor += w;
-      return w > 0 ? <rect key={cls} x={rx} y={y + 2} width={w} height={5} fill={classColor(cls, allClasses)} /> : null;
-    });
-
-    return (
-      <g style={gStyle}>
-        <rect x={x - 38} y={y - 24} width={76} height={50} rx={11}
-          fill={C.panel} stroke={leafStroke} strokeWidth={highlighted ? 2 : 1.4} filter={leafFilter} />
-        <text x={x} y={y - 9} textAnchor="middle" fill={highlighted ? PATH_COLOR : C.text} fontSize={9}
-          fontFamily="'JetBrains Mono',monospace" fontWeight={600}>{displayLabel}</text>
-        <rect x={barX0} y={y + 2} width={BAR_W} height={5} rx={2.5} fill="rgba(255,255,255,0.06)" />
-        {barSegs}
-        <text x={x} y={y + 17} textAnchor="middle" fill={C.dim} fontSize={7.5}
-          fontFamily="'JetBrains Mono',monospace">n={node.samples} G={node.impurity.toFixed(3)}</text>
-      </g>
-    );
-  }
-
-  // ── Split node ─────────────────────────────────────────────────────────────
-  const revealed    = phase >= 2;
-  const borderColor = highlighted ? PATH_COLOR : (revealed ? C.accent : C.orange);
-  const filterId    = highlighted ? "url(#path-glow)" : (revealed ? "url(#ng)" : "url(#ng-p)");
-  const { line1, line2 } = splitFeatureName(node.featureName ?? "");
-  const crit = isRegression ? "MSE" : "G";
-
-  return (
-    <g style={{ opacity: dimmed ? 0.2 : 1, transition: "opacity .3s" }}>
-      <rect x={x - 90} y={y - 27} width={180} height={54} rx={11}
-        fill={C.panel} stroke={borderColor} strokeWidth={revealed ? 1.4 : 1.8}
-        filter={filterId} style={{ transition: "stroke 0.25s, stroke-width 0.25s" }} />
-      <g style={{ opacity: revealed ? 0 : 1, transition: "opacity 0.2s" }}>
-        <text x={x} y={y - 5} textAnchor="middle" fill={C.orange} fontSize={11}
-          fontFamily="'JetBrains Mono',monospace" fontWeight={700}>?</text>
-        <text x={x} y={y + 11} textAnchor="middle" fill={C.dim} fontSize={7.5}
-          fontFamily="'JetBrains Mono',monospace">n={node.samples}</text>
-      </g>
-      <g style={{ opacity: revealed ? 1 : 0, transition: "opacity 0.3s" }}>
-        {line2 ? (
-          <>
-            <text x={x} y={y - 13} textAnchor="middle" fill={C.accent} fontSize={8.5}
-              fontFamily="'JetBrains Mono',monospace" fontWeight={700}>{line1}</text>
-            <text x={x} y={y - 2} textAnchor="middle" fill={C.accent} fontSize={8.5}
-              fontFamily="'JetBrains Mono',monospace" fontWeight={700}>{line2}</text>
-            <text x={x} y={y + 14} textAnchor="middle" fill={C.dim} fontSize={7.5}
-              fontFamily="'JetBrains Mono',monospace">≤{node.threshold} {crit}={node.gini.toFixed(3)} n={node.samples}</text>
-          </>
-        ) : (
-          <>
-            <text x={x} y={y - 6} textAnchor="middle" fill={C.accent} fontSize={9}
-              fontFamily="'JetBrains Mono',monospace" fontWeight={700}>{line1}</text>
-            <text x={x} y={y + 10} textAnchor="middle" fill={C.dim} fontSize={7.5}
-              fontFamily="'JetBrains Mono',monospace">≤{node.threshold} {crit}={node.gini.toFixed(3)} n={node.samples}</text>
-          </>
-        )}
-      </g>
-    </g>
-  );
-}
 
 const EMPTY_TS = { visibleIds: [], nodeId: null, phase: 0, stepIdx: -1 };
 
@@ -332,7 +49,7 @@ function AlgoTooltip({ mode }) {
   const lines = ALGO_DESC[mode] ?? [];
   const show = () => {
     const r = btnRef.current?.getBoundingClientRect();
-    if (r) setPos({ left: r.left + r.width / 2, top: r.bottom + 8 });
+    if (r) setPos(tooltipPosition(r, { prefer: 'below', gap: 8, width: 280, height: 80 }));
   };
   return (
     <span style={{ display: "inline-flex", alignItems: "center", marginLeft: 8 }}>
@@ -351,10 +68,10 @@ function AlgoTooltip({ mode }) {
         onMouseEnterCapture={e => { e.currentTarget.style.color = C.dim; e.currentTarget.style.borderColor = C.dim; }}
         onMouseLeaveCapture={e => { e.currentTarget.style.color = C.dimmer; e.currentTarget.style.borderColor = C.border; }}
       >?</span>
-      {pos && (
+      {pos && createPortal(
         <div style={{
           position: "fixed", left: pos.left, top: pos.top,
-          transform: "translateX(-50%)", zIndex: 1000,
+          zIndex: 9999,
           background: "#141c2e", border: `1px solid rgba(255,255,255,0.08)`,
           borderRadius: 10, padding: "12px 16px",
           fontSize: 10.5, color: C.dim, lineHeight: 1.75,
@@ -362,678 +79,10 @@ function AlgoTooltip({ mode }) {
           boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
         }}>
           {lines.map((l, i) => <div key={i}>{l}</div>)}
-        </div>
+        </div>,
+        document.body
       )}
     </span>
-  );
-}
-
-// ─── CSV processing helpers ────────────────────────────────────────────────────
-const NA_VALS = new Set(["", "NA", "na", "nan", "NaN", "?", "null", "undefined", "N/A", "n/a"]);
-
-// Turn a raw target value into a display label.
-// Numeric values get a "Class " prefix; string values are used as-is (capitalised).
-function formatClassLabel(raw) {
-  const s = String(raw).trim();
-  if (s === "") return "Unknown";
-  const n = Number(s);
-  if (!isNaN(n) && s !== "") return `Class ${s}`;
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
-
-function detectNAs(rows, headers) {
-  let total = 0;
-  const byCol = {};
-  headers.forEach(h => { byCol[h] = 0; });
-  rows.forEach(r => headers.forEach(h => {
-    if (NA_VALS.has(String(r[h] ?? "").trim())) { total++; byCol[h]++; }
-  }));
-  return { total, byCol };
-}
-
-// Stratified random sample without replacement, preserving class proportions.
-function stratifiedSample(rows, targetCol, n) {
-  // Group by raw target value
-  const groups = new Map();
-  rows.forEach(r => {
-    const key = String(r[targetCol] ?? "");
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(r);
-  });
-
-  const total = rows.length;
-  const result = [];
-  for (const [, group] of groups) {
-    const take = Math.max(1, Math.round((group.length / total) * n));
-    // Fisher-Yates shuffle in-place on a copy, then slice
-    const g = [...group];
-    for (let i = g.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [g[i], g[j]] = [g[j], g[i]];
-    }
-    result.push(...g.slice(0, Math.min(take, g.length)));
-  }
-  // Final shuffle so classes are interleaved
-  for (let i = result.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [result[i], result[j]] = [result[j], result[i]];
-  }
-  return result;
-}
-
-// selectedCols: array of column names the user kept (includes target). null = use all headers.
-function processCSVData(rawRows, headers, targetCol, naStrategy, sampleMode, selectedCols, taskType = "classification") {
-  // Resolve active column set — always include target, apply user selection for features
-  const activeCols = selectedCols
-    ? [targetCol, ...selectedCols.filter(h => h !== targetCol)]
-    : headers;
-
-  // Apply NA strategy over the active columns only
-  let rows;
-  if (naStrategy === "drop") {
-    rows = rawRows.filter(r => activeCols.every(h => !NA_VALS.has(String(r[h] ?? "").trim())));
-  } else {
-    // Fill non-target numeric active columns with column median
-    const medians = {};
-    activeCols.filter(h => h !== targetCol).forEach(h => {
-      const nums = rawRows.map(r => parseFloat(r[h])).filter(v => !isNaN(v)).sort((a, b) => a - b);
-      if (nums.length) medians[h] = nums[Math.floor(nums.length / 2)];
-    });
-    rows = rawRows.map(r => {
-      const copy = { ...r };
-      activeCols.forEach(h => {
-        if (h !== targetCol && NA_VALS.has(String(r[h] ?? "").trim())) {
-          copy[h] = String(medians[h] ?? 0);
-        }
-      });
-      return copy;
-    });
-  }
-
-  if (rows.length === 0) return null;
-
-  const totalRows = rows.length;
-  const sampleN = (typeof sampleMode === "number") ? Math.min(sampleMode, rows.length) : rows.length;
-  if (sampleN < rows.length) {
-    if (taskType === "classification") {
-      rows = stratifiedSample(rows, targetCol, sampleN);
-    } else {
-      for (let i = rows.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [rows[i], rows[j]] = [rows[j], rows[i]];
-      }
-      rows = rows.slice(0, sampleN);
-    }
-  }
-  const sampledRows = rows.length;
-
-  const featCols = activeCols.filter(h => h !== targetCol);
-
-  // Determine numeric vs categorical
-  const isNum = {};
-  featCols.forEach(h => {
-    const vals = rows.map(r => String(r[h] ?? "").trim()).filter(v => !NA_VALS.has(v));
-    isNum[h] = vals.length > 0 && vals.every(v => v !== "" && !isNaN(parseFloat(v)));
-  });
-
-  // Unique values for categoricals (for one-hot)
-  const catVals = {};
-  featCols.filter(h => !isNum[h]).forEach(h => {
-    catVals[h] = [...new Set(rows.map(r => String(r[h] ?? "")))].sort();
-  });
-
-  // Build feature name list
-  const features = [];
-  featCols.forEach(h => {
-    if (isNum[h]) {
-      features.push(h);
-    } else {
-      catVals[h].slice(1).forEach(v => features.push(`${h}_${v}`));
-    }
-  });
-
-  // Classification: map target to stable class label strings.
-  // Regression: keep target as raw float.
-  let classLabels = [];
-  let targetMap   = {};
-  if (taskType === "classification") {
-    const targetUniq = [...new Set(rows.map(r => String(r[targetCol] ?? "")))].sort();
-    classLabels = targetUniq.map(v => formatClassLabel(v));
-    targetMap   = Object.fromEntries(targetUniq.map((v, i) => [v, classLabels[i]]));
-  }
-
-  const data = rows.map(r => {
-    const obj = {};
-    featCols.forEach(h => {
-      if (isNum[h]) {
-        obj[h] = parseFloat(r[h]) || 0;
-      } else {
-        catVals[h].slice(1).forEach(v => {
-          obj[`${h}_${v}`] = String(r[h] ?? "") === v ? 1 : 0;
-        });
-      }
-    });
-    obj["target"] = taskType === "regression"
-      ? parseFloat(r[targetCol]) || 0
-      : (targetMap[String(r[targetCol] ?? "")] ?? String(r[targetCol] ?? ""));
-    return obj;
-  });
-
-  return { data, features, targetCol: "target", totalRows, sampledRows, classLabels };
-}
-
-// ─── CSV Modal ─────────────────────────────────────────────────────────────────
-function DataModal({ modal, onUpdate, onConfirm, onCancel }) {
-  const { fileName, rawRows, headers, naStats, selectedTarget, naStrategy, sampleMode, selectedColumns, warning, taskType = "classification" } = modal;
-  const includedCols = selectedColumns ?? headers;
-  const [previewOpen, setPreviewOpen] = useState(true);
-
-  const toggleCol = (h) => {
-    if (h === selectedTarget) return;
-    const next = includedCols.includes(h)
-      ? includedCols.filter(c => c !== h)
-      : [...includedCols, h];
-    if (!next.includes(selectedTarget)) next.push(selectedTarget);
-    onUpdate({ selectedColumns: next });
-  };
-
-  const handleConfirm = () => {
-    const result = processCSVData(rawRows, headers, selectedTarget, naStrategy, sampleMode ?? rawRows.length, includedCols, taskType);
-    if (!result) return;
-    onConfirm(result.data, result.features, result.targetCol,
-              fileName.replace(".csv", ""), result.totalRows, result.sampledRows, result.classLabels, taskType, selectedTarget);
-  };
-
-  const featureCols  = headers.filter(h => h !== selectedTarget);
-  const checkedCount = featureCols.filter(h => includedCols.includes(h)).length;
-
-  // Inject slider CSS once
-  useEffect(() => {
-    const id = "sampling-slider-style";
-    if (document.getElementById(id)) return;
-    const s = document.createElement("style");
-    s.id = id;
-    s.textContent = `
-      input.sampling-slider {
-        -webkit-appearance: none; appearance: none;
-        outline: none; cursor: pointer;
-        background: transparent; height: 24px; width: 100%;
-      }
-      input.sampling-slider::-webkit-slider-runnable-track {
-        height: 4px; background: transparent; border-radius: 2px;
-      }
-      input.sampling-slider::-moz-range-track {
-        height: 4px; background: transparent; border-radius: 2px;
-      }
-      input.sampling-slider::-webkit-slider-thumb {
-        -webkit-appearance: none;
-        width: 18px; height: 18px; border-radius: 50%;
-        background: #f59e0b; cursor: pointer;
-        margin-top: -7px; border: none;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.5);
-        transition: box-shadow 0.15s ease, width 0.15s ease, height 0.15s ease, margin-top 0.15s ease;
-      }
-      input.sampling-slider:hover::-webkit-slider-thumb {
-        width: 20px; height: 20px; margin-top: -8px;
-        box-shadow: 0 1px 8px rgba(0,0,0,0.5), 0 0 0 5px rgba(245,158,11,0.18);
-      }
-      input.sampling-slider::-moz-range-thumb {
-        width: 18px; height: 18px; border-radius: 50%;
-        background: #f59e0b; cursor: pointer; border: none;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.5);
-      }
-    `;
-    document.head.appendChild(s);
-    return () => document.getElementById(id)?.remove();
-  }, []);
-
-  // ── Per-column stats for header tooltips ────────────────────────────────────
-  const colStats = useMemo(() => {
-    const stats = {};
-    for (const h of headers) {
-      const nonNA  = rawRows
-        .map(r => String(r[h] ?? "").trim())
-        .filter(v => !NA_VALS.has(v));
-      const unique = new Set(nonNA).size;
-      stats[h] = { unique, missing: naStats.byCol[h] ?? 0 };
-    }
-    return stats;
-  }, [rawRows, headers, naStats]);
-
-  const [colTooltip, setColTooltip] = useState(null); // { col, x, y }
-
-  // ── Shared style tokens ──────────────────────────────────────────────────────
-  const sectionLabel = {
-    fontSize: 10, color: C.text, fontWeight: 600,
-    display: "block", marginBottom: 8,
-  };
-  // iOS-style segmented pill track
-  const segTrack = {
-    display: "flex", background: "rgba(255,255,255,0.05)",
-    borderRadius: 100, padding: 3,
-  };
-  const segBtn = (active) => ({
-    flex: 1, padding: "7px 12px", borderRadius: 100, border: "none",
-    cursor: "pointer", fontSize: 10,
-    fontWeight: active ? 700 : 400,
-    background: active ? C.accent : "transparent",
-    color: active ? "#000" : C.dim,
-    transition: "background 0.2s ease-out, color 0.2s ease-out",
-  });
-
-  return (
-    <div style={{
-      position: "fixed", inset: 0, background: "rgba(4,8,18,0.82)", zIndex: 100,
-      display: "flex", alignItems: "center", justifyContent: "center",
-      backdropFilter: "blur(8px)",
-    }}>
-      <div style={{
-        background: "#12192b",
-        borderRadius: 20,
-        boxShadow: "0 8px 32px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.06)",
-        padding: "28px 28px 24px",
-        maxWidth: 500, width: "90vw",
-        color: C.text,
-        maxHeight: "88vh", overflowY: "auto",
-        scrollbarWidth: "thin", scrollbarColor: `${C.border} transparent`,
-      }}>
-
-        {/* Title */}
-        <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 4 }}>
-          Configure dataset
-        </div>
-        <div style={{ fontSize: 10, color: C.dim, marginBottom: 22, lineHeight: 1.7 }}>
-          <span style={{ color: C.accent, fontWeight: 600 }}>{fileName}</span>
-          {"  ·  "}{rawRows.length.toLocaleString()} rows · {headers.length} columns
-          {naStats.total > 0 && <span style={{ color: C.orange, marginLeft: 8 }}>⚠ {naStats.total} missing</span>}
-          {warning && <div style={{ color: C.red, marginTop: 3, fontSize: 9 }}>⚠ {warning}</div>}
-        </div>
-
-        {/* ── Preview ────────────────────────────────────────────────────────── */}
-        <div style={{ marginBottom: 22 }}>
-          <button
-            onClick={() => setPreviewOpen(o => !o)}
-            style={{
-              display: "flex", alignItems: "center", gap: 7,
-              width: "100%", cursor: "pointer",
-              padding: "8px 12px", borderRadius: 9,
-              background: previewOpen ? "rgba(245,158,11,0.08)" : "rgba(255,255,255,0.04)",
-              border: "none",
-              boxShadow: previewOpen
-                ? `inset 0 0 0 1px ${C.accent}55`
-                : "inset 0 0 0 1px rgba(255,255,255,0.09)",
-              fontSize: 10, fontWeight: 500,
-              color: previewOpen ? C.accent : C.dim,
-              transition: "background 0.15s, box-shadow 0.15s, color 0.15s",
-            }}
-            onMouseEnter={e => {
-              if (!previewOpen) {
-                e.currentTarget.style.background = "rgba(255,255,255,0.07)";
-                e.currentTarget.style.color = C.text;
-              }
-            }}
-            onMouseLeave={e => {
-              e.currentTarget.style.background = previewOpen ? "rgba(245,158,11,0.08)" : "rgba(255,255,255,0.04)";
-              e.currentTarget.style.color = previewOpen ? C.accent : C.dim;
-            }}
-          >
-            <span style={{
-              fontSize: 10, lineHeight: 1,
-              display: "inline-block",
-              transition: "transform 0.2s ease-out",
-              transform: previewOpen ? "rotate(90deg)" : "rotate(0deg)",
-            }}>▶</span>
-            Preview &amp; select columns (first 100 rows)
-          </button>
-          {previewOpen && (
-            <>
-              <div style={{
-                marginTop: 10, overflowX: "auto", overflowY: "auto", height: 290,
-                borderRadius: 12,
-                background: "#0a0f1a",
-                boxShadow: "0 0 0 1px rgba(255,255,255,0.06)",
-                scrollbarWidth: "thin", scrollbarColor: `${C.border} transparent`,
-              }}>
-                <table style={{
-                  borderCollapse: "collapse", fontSize: 8.5,
-                  fontFamily: "'JetBrains Mono',monospace",
-                  whiteSpace: "nowrap", width: "100%",
-                  fontVariantNumeric: "tabular-nums",
-                }}>
-                  <thead>
-                    <tr>
-                      {headers.map(h => {
-                        const isTarget  = h === selectedTarget;
-                        const isChecked = isTarget || includedCols.includes(h);
-                        return (
-                          <th
-                            key={h}
-                            onClick={() => !isTarget && toggleCol(h)}
-                            onMouseEnter={e => {
-                              const r = e.currentTarget.getBoundingClientRect();
-                              setColTooltip({ col: h, x: r.left, y: r.bottom + 4 });
-                            }}
-                            onMouseLeave={() => setColTooltip(null)}
-                            style={{
-                              padding: "7px 10px", textAlign: "left",
-                              background: "#0a0f1a",
-                              position: "sticky", top: 0,
-                              boxShadow: "0 1px 0 rgba(255,255,255,0.08)",
-                              whiteSpace: "nowrap",
-                              cursor: isTarget ? "default" : "pointer",
-                              opacity: isChecked ? 1 : 0.35,
-                              transition: "opacity 0.15s",
-                              userSelect: "none",
-                            }}
-                          >
-                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                              {/* Checkbox */}
-                              <div style={{
-                                width: 13, height: 13, borderRadius: 3, flexShrink: 0,
-                                background: isChecked ? (isTarget ? C.accent : C.accent) : "transparent",
-                                boxShadow: isChecked ? "none" : "0 0 0 1.5px rgba(255,255,255,0.25)",
-                                display: "flex", alignItems: "center", justifyContent: "center",
-                                transition: "background 0.15s, box-shadow 0.15s",
-                                opacity: isTarget ? 0.5 : 1,
-                              }}>
-                                {isChecked && (
-                                  <svg width="8" height="6" viewBox="0 0 8 6" fill="none">
-                                    <path d="M1 3L3 5L7 1" stroke="#000" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                                  </svg>
-                                )}
-                              </div>
-                              {/* Label + NA count */}
-                              <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
-                                <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                                  <span style={{
-                                    fontWeight: 600, fontSize: 8.5,
-                                    color: isTarget ? C.accent : isChecked ? C.dim : C.dimmer,
-                                  }}>
-                                    {h}
-                                  </span>
-                                  {isTarget && (
-                                    <span style={{ fontSize: 7, color: C.accent, opacity: 0.65, fontWeight: 400 }}>target</span>
-                                  )}
-                                </div>
-                                {(naStats.byCol[h] ?? 0) > 0 && (
-                                  <span style={{ fontSize: 7, color: C.orange, opacity: 0.8, fontWeight: 400 }}>
-                                    {naStats.byCol[h]} missing
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          </th>
-                        );
-                      })}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rawRows.slice(0, 100).map((row, ri) => (
-                      <tr key={ri} style={{ background: ri % 2 === 1 ? "rgba(255,255,255,0.025)" : "transparent" }}>
-                        {headers.map(h => {
-                          const isTarget  = h === selectedTarget;
-                          const isChecked = isTarget || includedCols.includes(h);
-                          return (
-                            <td key={h} style={{
-                              padding: "3.5px 10px",
-                              color: isTarget ? "#94a3b8" : C.dimmer,
-                              fontWeight: isTarget ? 500 : 400,
-                              borderBottom: "1px solid rgba(255,255,255,0.025)",
-                              opacity: isChecked ? 1 : 0.25,
-                              transition: "opacity 0.15s",
-                            }}>
-                              {String(row[h] ?? "—")}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              {/* Feature selection summary */}
-              <div style={{
-                marginTop: 7, fontSize: 9, color: C.dimmer,
-                display: "flex", alignItems: "center", gap: 6,
-              }}>
-                <span style={{ color: checkedCount < featureCols.length ? C.accent : C.dimmer, fontWeight: checkedCount < featureCols.length ? 600 : 400 }}>
-                  {checkedCount}/{featureCols.length} features selected
-                </span>
-                {checkedCount < featureCols.length && (
-                  <span>· {featureCols.length - checkedCount} excluded</span>
-                )}
-                <button
-                  onClick={() => onUpdate({ selectedColumns: headers })}
-                  style={{
-                    marginLeft: "auto", background: "none", border: "none",
-                    cursor: "pointer", fontSize: 8.5, color: C.dimmer,
-                    padding: 0,
-                    transition: "color 0.12s",
-                  }}
-                  onMouseEnter={e => { e.currentTarget.style.color = C.text; }}
-                  onMouseLeave={e => { e.currentTarget.style.color = C.dimmer; }}
-                >
-                  select all
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-
-        {/* ── Target column ──────────────────────────────────────────────────── */}
-        <div style={{ marginBottom: 22 }}>
-          <span style={sectionLabel}>Target column</span>
-          <div style={{ position: "relative" }}>
-            <select
-              value={selectedTarget}
-              onChange={e => {
-                const newTarget = e.target.value;
-                const detected  = detectTaskType(rawRows, newTarget);
-                onUpdate({ selectedTarget: newTarget, selectedColumns: headers, taskType: detected });
-              }}
-              onFocus={e => { e.target.style.boxShadow = `0 0 0 2px ${C.accent}44`; }}
-              onBlur={e => { e.target.style.boxShadow = "none"; }}
-              style={{
-                width: "100%", padding: "9px 32px 9px 12px",
-                background: "rgba(255,255,255,0.05)", borderRadius: 10,
-                border: "none", color: C.text, fontSize: 11,
-                fontFamily: "'JetBrains Mono',monospace",
-                cursor: "pointer", outline: "none",
-                appearance: "none", WebkitAppearance: "none",
-                transition: "box-shadow 0.15s",
-              }}>
-              {headers.map(h => <option key={h} value={h}>{h}</option>)}
-            </select>
-            <span style={{
-              position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)",
-              pointerEvents: "none", color: C.dimmer, fontSize: 10, lineHeight: 1,
-            }}>▾</span>
-          </div>
-        </div>
-
-        {/* ── Task type ──────────────────────────────────────────────────────── */}
-        <div style={{ marginBottom: 22 }}>
-          <span style={sectionLabel}>Task type</span>
-          <div style={segTrack}>
-            {["classification", "regression"].map(t => (
-              <button key={t} onClick={() => onUpdate({ taskType: t })} style={segBtn(taskType === t)}>
-                {t === "classification" ? "Classification" : "Regression"}
-              </button>
-            ))}
-          </div>
-          <div style={{ fontSize: 9, color: C.dimmer, marginTop: 7 }}>
-            {taskType === "regression"
-              ? "Predicts a continuous numeric value · MSE split criterion"
-              : "Predicts a class label · Gini impurity split criterion"}
-          </div>
-        </div>
-
-
-
-        {/* ── Missing values ─────────────────────────────────────────────────── */}
-        {naStats.total > 0 && (
-          <div style={{ marginBottom: 22 }}>
-            <span style={sectionLabel}>Handle missing values</span>
-            <div style={segTrack}>
-              {[
-                { key: "drop", label: "Drop rows" },
-                { key: "median", label: "Fill with median" },
-              ].map(({ key, label }) => (
-                <button key={key} onClick={() => onUpdate({ naStrategy: key })} style={segBtn(naStrategy === key)}>
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* ── Sampling ───────────────────────────────────────────────────────── */}
-        {rawRows.length > 100 && (() => {
-          const sv        = typeof sampleMode === "number" ? sampleMode : Math.min(1000, rawRows.length);
-          const capVal    = Math.min(rawRows.length, 2000);
-          const atCap     = sv >= rawRows.length && rawRows.length < 2000;
-          const valuePct  = Math.min((sv - 100) / 1900 * 100, 100);
-          const capPct    = Math.min((capVal - 100) / 1900 * 100, 100);
-          const recommPct = (1000 - 100) / 1900 * 100; // ≈47.4%
-          const showRecomm = rawRows.length >= 1000;
-
-          const trackGrad = rawRows.length < 2000
-            ? `linear-gradient(to right, ${C.accent} 0% ${valuePct}%, rgba(255,255,255,0.09) ${valuePct}% ${capPct}%, rgba(255,255,255,0.03) ${capPct}% 100%)`
-            : `linear-gradient(to right, ${C.accent} 0% ${valuePct}%, rgba(255,255,255,0.09) ${valuePct}% 100%)`;
-
-          return (
-            <div style={{ marginBottom: 22 }}>
-              {/* Header row */}
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-                <span style={sectionLabel}>Sampling</span>
-                <span style={{ fontSize: 13, lineHeight: 1 }}>
-                  <span style={{ fontWeight: 600, color: C.accent }}>{sv.toLocaleString()}</span>
-                  <span style={{ fontSize: 10, color: C.dim, marginLeft: 4 }}>rows</span>
-                </span>
-              </div>
-
-              {/* Slider */}
-              <div style={{ position: "relative", height: 24, marginBottom: 0 }}>
-                {/* Track */}
-                <div style={{
-                  position: "absolute", left: 0, right: 0, top: "50%",
-                  transform: "translateY(-50%)", height: 4, borderRadius: 2,
-                  background: trackGrad, pointerEvents: "none",
-                }} />
-                {/* Dataset limit tick */}
-                {rawRows.length < 2000 && (
-                  <div style={{
-                    position: "absolute", top: "50%", left: `${capPct}%`,
-                    transform: "translate(-50%, -50%)",
-                    width: 1.5, height: 8, borderRadius: 1,
-                    background: C.dimmer, pointerEvents: "none", opacity: 0.6,
-                  }} />
-                )}
-                <input
-                  type="range"
-                  className="sampling-slider"
-                  min={100} max={2000} step={100}
-                  value={sv}
-                  onChange={e => {
-                    const v = Math.min(+e.target.value, rawRows.length);
-                    onUpdate({ sampleMode: v });
-                  }}
-                />
-              </div>
-
-              {/* Scale labels row with recommended marker */}
-              <div style={{ position: "relative", height: 20, marginBottom: 6 }}>
-                <span style={{ position: "absolute", left: 0, fontSize: 7.5, color: C.text, top: 4 }}>100</span>
-                <span style={{ position: "absolute", right: 0, fontSize: 7.5, color: C.text, top: 4 }}>2,000</span>
-                {showRecomm && (
-                  <div style={{
-                    position: "absolute", top: 0, left: `${recommPct}%`,
-                    transform: "translateX(-50%)",
-                    display: "flex", flexDirection: "column", alignItems: "center",
-                    pointerEvents: "none",
-                  }}>
-                    <div style={{ width: 1, height: 5, background: C.dim }} />
-                    <span style={{ fontSize: 7, color: C.dim, whiteSpace: "nowrap", marginTop: 1 }}>
-                      recommended
-                    </span>
-                  </div>
-                )}
-              </div>
-
-              {/* Notes */}
-              {atCap ? (
-                <div style={{ fontSize: 9, color: C.orange }}>
-                  Dataset only has {rawRows.length.toLocaleString()} rows — using all data
-                </div>
-              ) : (
-                <div style={{ fontSize: 9, color: C.dimmer }}>
-                  Stratified sampling preserves class proportions
-                </div>
-              )}
-            </div>
-          );
-        })()}
-
-        {/* Privacy note */}
-        <div style={{ fontSize: 8.5, color: C.dimmer, marginBottom: 20, textAlign: "center", letterSpacing: "0.02em" }}>
-          🔒 Your data never leaves your browser
-        </div>
-
-        {/* Actions */}
-        <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={onCancel}
-            onMouseEnter={e => { e.currentTarget.style.color = C.text; e.currentTarget.style.background = "rgba(255,255,255,0.06)"; }}
-            onMouseLeave={e => { e.currentTarget.style.color = C.dim; e.currentTarget.style.background = "transparent"; }}
-            style={{
-              flex: 1, padding: "10px", borderRadius: 12, border: "none",
-              background: "transparent", color: C.dim, fontSize: 11,
-              fontFamily: "inherit", cursor: "pointer",
-              transition: "color 0.15s, background 0.15s",
-            }}>Cancel</button>
-          <button onClick={handleConfirm}
-            onMouseEnter={e => { e.currentTarget.style.transform = "scale(1.02)"; }}
-            onMouseLeave={e => { e.currentTarget.style.transform = "scale(1)"; }}
-            style={{
-              flex: 2, padding: "10px", borderRadius: 12, border: "none",
-              background: `linear-gradient(135deg,${C.accent},#d97706)`,
-              color: "#000", fontSize: 11, fontFamily: "inherit",
-              cursor: "pointer", fontWeight: 700,
-              transition: "transform 0.15s ease-out",
-            }}>Confirm &amp; Build</button>
-        </div>
-      </div>
-
-      {/* ── Column header tooltip ──────────────────────────────────────────── */}
-      {colTooltip && colStats[colTooltip.col] && (() => {
-        const s = colStats[colTooltip.col];
-        return (
-          <div style={{
-            position: "fixed",
-            left: Math.min(colTooltip.x, window.innerWidth - 160),
-            top: colTooltip.y,
-            zIndex: 9999,
-            background: "#1a2235",
-            borderRadius: 8,
-            padding: "8px 11px",
-            boxShadow: "0 8px 24px rgba(0,0,0,0.6), inset 0 0 0 1px rgba(255,255,255,0.08)",
-            pointerEvents: "none",
-          }}>
-            <div style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 9, color: C.dim }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
-                <span>Unique values</span>
-                <span style={{ color: C.text, fontFamily: "'JetBrains Mono',monospace" }}>{s.unique}</span>
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
-                <span>Missing</span>
-                <span style={{ color: s.missing > 0 ? C.orange : C.dim, fontFamily: "'JetBrains Mono',monospace" }}>
-                  {s.missing}
-                </span>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
-    </div>
   );
 }
 
@@ -1049,7 +98,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
   const [csvModal, setCsvModal]           = useState(null);
   const [dragOver, setDragOver]           = useState(false);
   const [selectedSampleIdx, setSelectedSampleIdx] = useState(null);
-  const [oobTooltipVisible, setOobTooltipVisible] = useState(false);
+  const [oobTooltipVisible, setOobTooltipVisible] = useState(null); // { top, left } | null
 
   const builtinMeta     = builtinDataset === "music" ? musicMeta : builtinDataset === "salary" ? salaryMeta : heartMeta;
   const builtinData     = builtinDataset === "music" ? musicData : builtinDataset === "salary" ? salaryData : heartData;
@@ -1074,20 +123,30 @@ export default function RandomForestViz({ mode = "random-forest" }) {
   const [speed, setSpeed]               = useState(1);
   const [buildProgress, setBuildProgress] = useState(null); // null | { done, total }
   const location = useLocation();
-  const growRef   = useRef(false);
-  const cancelRef = useRef(false);
-  const workerRef = useRef(null);
+  const growRef      = useRef(false);
+  const cancelRef    = useRef(false);
+  const workerRef    = useRef(null);
+  const liveStepRef  = useRef({ treeIdx: 0, stepIdx: -1 }); // tracks exact position during animation
+  const pausedAtRef  = useRef(null);                          // set on Stop, cleared on next Grow
+  const resetClickRef = useRef(null);                         // timer for single vs double click on Reset
 
   const [tabTooltip, setTabTooltip]           = useState(null); // { x, y }
+  const [resetTooltip, setResetTooltip]       = useState(null); // { x, y }
   const [dragRange, setDragRange]             = useState(null); // { start, end } | null
   const [hintDismissed, setHintDismissed]     = useState(false);
   const [scrollHint, setScrollHint]           = useState(false); // "Scroll down to predict ↓" hint
   const [lockedParamTooltip, setLockedParamTooltip] = useState(null); // { key, x, y }
+  const [rfDropOpen,  setRfDropOpen]  = useState(false);
+  const [rfDropPos,   setRfDropPos]   = useState(null); // { top, left } for portaled menu
+  const rfDropRef  = useRef(null);
+  const rfMenuRef  = useRef(null);
   const dragRef    = useRef({ active: false, startIdx: null, endIdx: null, moved: false });
   const tabRefs    = useRef([]);
   const tabScrollRef = useRef(null);
   const predSectionRef = useRef(null);
 
+  const [calcExpanded, setCalcExpanded]     = useState(true);
+  const [calcPanelWidth, setCalcPanelWidth] = useState(220);
   const [zoom, setZoom]                     = useState(1);
   const [pan, setPan]                       = useState({ x: 0, y: 0 });
   const [cursorGrabbing, setCursorGrabbing] = useState(false);
@@ -1125,37 +184,30 @@ export default function RandomForestViz({ mode = "random-forest" }) {
         from { opacity: 0; transform: translateX(-50%) translateY(4px); }
         to   { opacity: 1; transform: translateX(-50%) translateY(0); }
       }
-      select.ds-pill {
-        -webkit-appearance: none; appearance: none;
-        background: rgba(255,255,255,0.05);
-        border: 1px solid rgba(255,255,255,0.1);
-        border-radius: 20px;
-        color: #e2e8f0;
-        font-family: inherit;
-        font-size: 12px;
-        font-weight: 500;
-        padding: 5px 28px 5px 12px;
-        cursor: pointer;
-        outline: none;
-        transition: box-shadow 0.2s ease, border-color 0.2s ease;
-        min-width: 0;
-      }
-      select.ds-pill:hover {
-        border-color: rgba(255,255,255,0.2);
-        box-shadow: 0 0 0 3px rgba(245,158,11,0.12);
-      }
-      select.ds-pill:focus {
-        border-color: rgba(245,158,11,0.4);
-        box-shadow: 0 0 0 3px rgba(245,158,11,0.12);
-      }
-      select.ds-pill option {
-        background: #111827;
-        color: #e2e8f0;
-      }
+      .rf-ds-drop-menu { position: fixed; z-index: 99999; min-width: 230px;
+        background: #1a2235; border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 4px;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.6); }
+      .rf-ds-opt { display: flex; align-items: center; gap: 6px; width: 100%; padding: 7px 10px; border-radius: 5px;
+        border: none; background: none; font-family: 'Inter', system-ui, sans-serif; font-size: 11px;
+        text-align: left; cursor: pointer; white-space: nowrap; color: #e2e8f0; transition: background 0.12s; box-sizing: border-box; }
+      .rf-ds-opt:hover { background: rgba(255,255,255,0.08); }
+      .rf-ds-opt[data-active="true"] { color: #f59e0b; }
     `;
     document.head.appendChild(s);
     return () => document.getElementById(id)?.remove();
   }, []);
+
+  // Close dataset dropdown on outside click
+  useEffect(() => {
+    if (!rfDropOpen) return;
+    const handler = (e) => {
+      const inTrigger = rfDropRef.current?.contains(e.target);
+      const inMenu    = rfMenuRef.current?.contains(e.target);
+      if (!inTrigger && !inMenu) setRfDropOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [rfDropOpen]);
 
   const getTS = (idx) => treeStates[idx] || EMPTY_TS;
 
@@ -1170,8 +222,9 @@ export default function RandomForestViz({ mode = "random-forest" }) {
   // Accepts data explicitly so it can be called right after state updates.
   // Uses a Web Worker to keep the UI responsive; posts each tree back individually.
   const buildForestWithData = useCallback((data, features, targetCol, taskType = "classification") => {
-    cancelRef.current = true;
-    growRef.current   = false;
+    cancelRef.current   = true;
+    growRef.current     = false;
+    pausedAtRef.current = null;
     setGrowing(false);
 
     if (workerRef.current) {
@@ -1296,17 +349,29 @@ export default function RandomForestViz({ mode = "random-forest" }) {
     cancelRef.current = false;
     setGrowing(true);
 
-    for (let treeIdx = 0; treeIdx < trees.length; treeIdx++) {
+    const resume       = pausedAtRef.current;
+    pausedAtRef.current = null;
+    const startTreeIdx  = resume?.treeIdx ?? 0;
+
+    for (let treeIdx = startTreeIdx; treeIdx < trees.length; treeIdx++) {
       if (cancelRef.current) break;
       if (!trees[treeIdx]) continue;
 
       setCurTree(treeIdx);
-      setTS(treeIdx, EMPTY_TS);
-      await new Promise(r => setTimeout(r, 80));
+      liveStepRef.current = { treeIdx, stepIdx: -1 };
 
-      const steps = getSteps(treeIdx);
-      for (let i = 0; i < steps.length; i++) {
+      const isResumedTree = treeIdx === startTreeIdx && resume !== null;
+      if (!isResumedTree) {
+        setTS(treeIdx, EMPTY_TS);
+        await new Promise(r => setTimeout(r, 80));
+      }
+
+      const steps    = getSteps(treeIdx);
+      const fromStep = isResumedTree ? (resume.stepIdx + 1) : 0;
+
+      for (let i = fromStep; i < steps.length; i++) {
         if (cancelRef.current) break;
+        liveStepRef.current = { treeIdx, stepIdx: i };
         const vis = [];
         for (let j = 0; j <= i; j++) {
           if (steps[j].commit && !vis.includes(steps[j].nodeId)) vis.push(steps[j].nodeId);
@@ -1497,6 +562,32 @@ export default function RandomForestViz({ mode = "random-forest" }) {
     setCsvModal(null);
     buildForestWithData(data, features, targetCol, taskType);
   }, [buildForestWithData]);
+
+  // ── Calculations sidebar resize/toggle ────────────────────────────────────
+  // Single handler: drag = resize, click (no drag) = collapse toggle.
+  const onCalcHandleMouseDown = useCallback((e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const startX   = e.clientX;
+    const startW   = calcPanelWidth;
+    const expanded = calcExpanded;
+    let moved = false;
+
+    const onMove = (ev) => {
+      if (!expanded) return; // don't resize when collapsed
+      if (!moved && Math.abs(ev.clientX - startX) > 3) moved = true;
+      if (!moved) return;
+      const delta  = startX - ev.clientX; // left-edge drag: left = wider
+      setCalcPanelWidth(Math.max(180, Math.min(400, startW + delta)));
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup",   onUp);
+      if (!moved) setCalcExpanded(x => !x); // plain click = toggle
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup",   onUp);
+  }, [calcExpanded, calcPanelWidth]);
 
   // ── Derived render values ──────────────────────────────────────────────────
   const currentTree = trees[curTree];
@@ -1747,31 +838,37 @@ export default function RandomForestViz({ mode = "random-forest" }) {
                   <span style={{ fontSize: 9, color: C.muted, letterSpacing: "0.04em", whiteSpace: "nowrap" }}>
                     Dataset
                   </span>
-                  <div style={{ position: "relative", display: "inline-flex", alignItems: "center" }}>
-                    <select
-                      className="ds-pill"
-                      value={customDataset ? "custom" : builtinDataset}
+                  <div ref={rfDropRef} style={{ position: "relative", display: "inline-flex", alignItems: "center" }}>
+                    {/* Trigger button */}
+                    <button
                       disabled={disabled}
-                      onChange={e => {
-                        const val = e.target.value;
-                        if (val === "upload") { fileInputRef.current?.click(); return; }
-                        if (val === "custom") return;
-                        switchToBuiltin(val);
+                      onClick={e => {
+                        if (disabled) return;
+                        const r = e.currentTarget.getBoundingClientRect();
+                        setRfDropPos({ top: r.bottom + 4, left: r.left });
+                        setRfDropOpen(v => !v);
                       }}
-                      style={{ opacity: disabled ? 0.45 : 1, cursor: disabled ? "default" : "pointer" }}
+                      style={{
+                        WebkitAppearance: "none", appearance: "none",
+                        background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)",
+                        borderRadius: 20, color: C.text, fontFamily: "inherit", fontSize: 12,
+                        fontWeight: 500, padding: "5px 28px 5px 12px", cursor: disabled ? "not-allowed" : "pointer",
+                        outline: "none", transition: "box-shadow 0.2s ease, border-color 0.2s ease",
+                        opacity: disabled ? 0.5 : 1,
+                      }}
+                      onMouseEnter={e => { if (!disabled) { e.currentTarget.style.borderColor = "rgba(255,255,255,0.2)"; e.currentTarget.style.boxShadow = "0 0 0 3px rgba(245,158,11,0.12)"; }}}
+                      onMouseLeave={e => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; e.currentTarget.style.boxShadow = "none"; }}
                     >
-                      <option value="heart">Built-in: Heart Disease (Binary classification)</option>
-                      <option value="music">Built-in: Music Genres (Multiclass classification)</option>
-                      <option value="salary">Built-in: Salary (Regression)</option>
-                      {customDataset && <option value="custom">{customDataset.name}</option>}
-                      <option value="upload">Upload CSV…</option>
-                    </select>
-                    {/* Chevron overlay */}
-                    <span style={{
-                      position: "absolute", right: 9, top: "50%",
-                      transform: "translateY(-50%)",
-                      pointerEvents: "none", color: C.dimmer, fontSize: 10, lineHeight: 1,
-                    }}>▾</span>
+                      {customDataset
+                        ? customDataset.name
+                        : builtinDataset === "music"
+                          ? "Built-in: Music Genres (Multiclass classification)"
+                          : builtinDataset === "salary"
+                            ? "Built-in: Salary (Regression)"
+                            : "Built-in: Heart Disease (Binary classification)"}
+                    </button>
+                    <span style={{ position: "absolute", right: 9, top: "50%", transform: "translateY(-50%)",
+                      pointerEvents: "none", color: C.dimmer, fontSize: 10 }}>▾</span>
                   </div>
                 </div>
 
@@ -1807,6 +904,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
             <label style={{ fontSize: 9, color: C.muted, fontWeight: 400 }}>Max depth</label>
             <input type="number" min={1} max={activeFeatures.length} value={maxDepthStr} disabled={growing}
               onChange={e => setMaxDepthStr(e.target.value)}
+              onKeyDown={e => e.stopPropagation()}
               onBlur={() => {
                 const v = Math.max(1, Math.min(activeFeatures.length, parseInt(maxDepthStr, 10) || 1));
                 setMaxDepth(v); setMaxDepthStr(String(v));
@@ -1819,7 +917,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
             // Outer wrapper: handles hover + positioning. No opacity here so tooltip is unaffected.
             <div
               style={{ position: "relative", cursor: "default" }}
-              onMouseEnter={() => setLockedParamTooltip("maxFeatures")}
+              onMouseEnter={e => setLockedParamTooltip({ which: "maxFeatures", ...tooltipPosition(e.currentTarget.getBoundingClientRect(), { prefer: 'above', width: 240, height: 58 }) })}
               onMouseLeave={() => setLockedParamTooltip(null)}
             >
               {/* Dimmed control content */}
@@ -1831,24 +929,6 @@ export default function RandomForestViz({ mode = "random-forest" }) {
                   <option value="all">p (all) → {activeFeatures.length}</option>
                 </select>
               </div>
-              {/* Tooltip — sibling of dimmed content, inherits full opacity */}
-              {lockedParamTooltip === "maxFeatures" && (
-                <div style={{
-                  position: "absolute", bottom: "calc(100% + 10px)", left: "50%",
-                  transform: "translateX(-50%)",
-                  width: 240, padding: "10px 13px", borderRadius: 10,
-                  background: "#1a2235",
-                  boxShadow: "0 8px 32px rgba(0,0,0,0.7), inset 0 0 0 1px rgba(255,255,255,0.12)",
-                  fontSize: 10.5, color: C.text, lineHeight: 1.65,
-                  fontWeight: 400, zIndex: 1000, pointerEvents: "none",
-                  animation: "fadeInUp 0.14s ease-out",
-                  whiteSpace: "normal",
-                }}>
-                  {mode === "decision-tree"
-                    ? "A decision tree evaluates all features at each split — switch to Random Forest for feature subsampling"
-                    : "Bagging typically considers all features at each split — switch to Random Forest to enable feature subsampling"}
-                </div>
-              )}
             </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -1866,7 +946,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
             // Outer wrapper: handles hover + positioning. No opacity here so tooltip is unaffected.
             <div
               style={{ position: "relative", cursor: "default" }}
-              onMouseEnter={() => setLockedParamTooltip("trees")}
+              onMouseEnter={e => setLockedParamTooltip({ which: "trees", ...tooltipPosition(e.currentTarget.getBoundingClientRect(), { prefer: 'above', width: 240, height: 40 }) })}
               onMouseLeave={() => setLockedParamTooltip(null)}
             >
               {/* Dimmed control content */}
@@ -1876,28 +956,13 @@ export default function RandomForestViz({ mode = "random-forest" }) {
                 </label>
                 <input type="number" value={1} disabled style={{ ...inp, width: 58, cursor: "not-allowed" }} />
               </div>
-              {/* Tooltip — sibling of dimmed content, inherits full opacity */}
-              {lockedParamTooltip === "trees" && (
-                <div style={{
-                  position: "absolute", bottom: "calc(100% + 10px)", left: "50%",
-                  transform: "translateX(-50%)",
-                  width: 240, padding: "10px 13px", borderRadius: 10,
-                  background: "#1a2235",
-                  boxShadow: "0 8px 32px rgba(0,0,0,0.7), inset 0 0 0 1px rgba(255,255,255,0.12)",
-                  fontSize: 10.5, color: C.text, lineHeight: 1.65,
-                  fontWeight: 400, zIndex: 1000, pointerEvents: "none",
-                  animation: "fadeInUp 0.14s ease-out",
-                  whiteSpace: "normal",
-                }}>
-                  A decision tree is a single model — switch to an ensemble
-                </div>
-              )}
             </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               <label style={{ fontSize: 9, color: C.muted, fontWeight: 400 }}>Trees</label>
               <input type="number" min={1} max={100} value={nEstimatorsStr} disabled={growing}
                 onChange={e => setNEstimatorsStr(e.target.value)}
+                onKeyDown={e => e.stopPropagation()}
                 onBlur={() => {
                   const v = Math.max(1, Math.min(100, parseInt(nEstimatorsStr, 10) || 1));
                   setNEstimators(v); setNEstimatorsStr(String(v));
@@ -1915,48 +980,51 @@ export default function RandomForestViz({ mode = "random-forest" }) {
           </div>
         </div>
 
-        {/* Action buttons */}
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <button onClick={buildForest} disabled={!!buildProgress}
-            onMouseEnter={e => { if (!buildProgress) { e.currentTarget.style.color = C.text; e.currentTarget.style.background = "rgba(255,255,255,0.06)"; } }}
-            onMouseLeave={e => { e.currentTarget.style.color = C.dim; e.currentTarget.style.background = "none"; }}
-            style={{
-              padding: "7px 16px", borderRadius: 10, border: "none",
-              background: "none", color: C.dim, fontSize: 11,
-              fontFamily: "inherit", cursor: buildProgress ? "default" : "pointer", fontWeight: 500,
-              transition: "color 0.15s ease-out, background 0.15s ease-out",
-              opacity: buildProgress ? 0.4 : 1,
-            }}>↻ Rebuild</button>
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-            <button
-              disabled={!!buildProgress}
-              onClick={() => {
-                if (buildProgress) return;
-                if (growing) { cancelRef.current = true; growRef.current = false; setGrowing(false); }
-                else { setHintDismissed(true); autoGrowAll(); }
-              }}
-              onMouseEnter={e => { if (!buildProgress) e.currentTarget.style.transform = "scale(1.03)"; }}
-              onMouseLeave={e => { e.currentTarget.style.transform = "scale(1)"; }}
-              style={{
-                padding: "8px 22px", borderRadius: 10, border: "none",
-                background: buildProgress
-                  ? "linear-gradient(135deg,#334155,#1e293b)"
-                  : growing
-                  ? "linear-gradient(135deg,#64748b,#475569)"
-                  : `linear-gradient(135deg,${C.accent},#d97706)`,
-                color: (buildProgress || growing) ? C.text : "#000", fontSize: 12, fontFamily: "inherit",
-                cursor: buildProgress ? "default" : "pointer", fontWeight: 700,
-                transition: "transform 0.15s ease-out, background 0.2s ease-out",
-                animation: (buildProgress || growing) ? "none" : "growPulse 2.5s ease-in-out infinite",
-              }}>
-              {buildProgress ? "Building…" : growing ? "■ Stop" : "▶ Grow"}
+        {/* Buttons */}
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+          <button disabled={!!buildProgress} onClick={buildForest}
+            style={{ padding: "7px 14px", borderRadius: 8, border: `1px solid ${C.border}`,
+              background: "transparent", color: C.dim, fontSize: 11, fontFamily: "inherit",
+              cursor: buildProgress ? "default" : "pointer", opacity: buildProgress ? 0.4 : 1,
+              transition: "color 0.15s, border-color 0.15s" }}
+            onMouseEnter={e => { if (!buildProgress) { e.currentTarget.style.color = C.text; e.currentTarget.style.borderColor = C.dim; } }}
+            onMouseLeave={e => { e.currentTarget.style.color = C.dim; e.currentTarget.style.borderColor = C.border; }}>
+            Rebuild
+          </button>
+
+          {growing ? (
+            <button onClick={() => { pausedAtRef.current = { ...liveStepRef.current }; cancelRef.current = true; growRef.current = false; setGrowing(false); }}
+              style={{ padding: "7px 14px", borderRadius: 8, border: "none",
+                background: `${C.red}22`, color: C.red, fontSize: 11, fontFamily: "inherit", cursor: "pointer",
+                transition: "background 0.15s, box-shadow 0.15s" }}
+              onMouseEnter={e => { e.currentTarget.style.background = `${C.red}38`; e.currentTarget.style.boxShadow = "0 0 10px rgba(239,68,68,0.2)"; }}
+              onMouseLeave={e => { e.currentTarget.style.background = `${C.red}22`; e.currentTarget.style.boxShadow = "none"; }}>
+              Stop
             </button>
-            {!growing && !buildProgress && (
-              <div style={{ fontSize: 8.5, color: C.muted }}>
-                or use ← → arrow keys
-              </div>
-            )}
-          </div>
+          ) : (
+            <button disabled={!!buildProgress} onClick={() => { setHintDismissed(true); autoGrowAll(); }}
+              style={{ padding: "7px 18px", borderRadius: 8, border: "none",
+                background: buildProgress ? C.border : `linear-gradient(135deg,${C.accent},#d97706)`,
+                color: buildProgress ? C.dim : "#000",
+                fontSize: 11, fontFamily: "inherit", cursor: buildProgress ? "default" : "pointer",
+                fontWeight: 600, transition: "box-shadow 0.15s, filter 0.15s" }}
+              onMouseEnter={e => { if (!buildProgress) { e.currentTarget.style.boxShadow = "0 0 12px rgba(245,158,11,0.3)"; e.currentTarget.style.filter = "brightness(1.1)"; } }}
+              onMouseLeave={e => { e.currentTarget.style.boxShadow = "none"; e.currentTarget.style.filter = "none"; }}>
+              Grow
+            </button>
+          )}
+
+          <button disabled={!trees.length || growing || !!buildProgress} onClick={growAllInstant}
+            style={{ padding: "7px 18px", borderRadius: 8, border: "none",
+              background: !trees.length || growing || buildProgress ? C.border : `linear-gradient(135deg,${C.accent},#d97706)`,
+              color: !trees.length || growing || buildProgress ? C.dim : "#000",
+              fontSize: 11, fontFamily: "inherit",
+              cursor: !trees.length || growing || buildProgress ? "default" : "pointer",
+              fontWeight: 600, transition: "box-shadow 0.15s, filter 0.15s" }}
+            onMouseEnter={e => { if (!trees.length || growing || buildProgress) return; e.currentTarget.style.boxShadow = "0 0 12px rgba(245,158,11,0.3)"; e.currentTarget.style.filter = "brightness(1.1)"; }}
+            onMouseLeave={e => { e.currentTarget.style.boxShadow = "none"; e.currentTarget.style.filter = "none"; }}>
+            Complete All
+          </button>
         </div>
       </div>
 
@@ -2035,7 +1103,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
                           setDragRange({ start: dragRef.current.startIdx, end: i });
                         } else if (t && !loading) {
                           const r = e.currentTarget.getBoundingClientRect();
-                          setTabTooltip({ x: r.left + r.width / 2, y: r.bottom + 6 });
+                          setTabTooltip(tooltipPosition(r, { prefer: 'below', gap: 6, width: 240, height: 28 }));
                         }
                       }}
                       onMouseLeave={() => {
@@ -2073,28 +1141,18 @@ export default function RandomForestViz({ mode = "random-forest" }) {
           borderLeft: nEstimators > 1 ? `1px solid rgba(255,255,255,0.06)` : "none",
           marginLeft: nEstimators > 1 ? 6 : 0,
         }}>
-          {nEstimators > 1 && (
-            <button onClick={growAllInstant} disabled={growing || !!buildProgress}
-              title="Instantly complete all trees without animation"
-              onMouseEnter={e => { if (!growing && !buildProgress) { e.currentTarget.style.color = C.text; e.currentTarget.style.boxShadow = "inset 0 0 0 1px rgba(255,255,255,0.16)"; } }}
-              onMouseLeave={e => { e.currentTarget.style.color = C.dim; e.currentTarget.style.boxShadow = "inset 0 0 0 1px rgba(255,255,255,0.08)"; }}
-              style={{
-                ...inp, flexShrink: 0,
-                padding: "3px 10px", fontSize: 10,
-                color: C.dim,
-                cursor: (growing || buildProgress) ? "default" : "pointer",
-                opacity: (growing || buildProgress) ? 0.4 : 1,
-              }}>Complete all</button>
-          )}
-
           {/* Step controls */}
           <button disabled={growing || !!buildProgress || ts.stepIdx <= -1} onClick={() => { setHintDismissed(true); goToStep(curTree, ts.stepIdx - 1); }}
-            style={{ ...inp, cursor: (growing || buildProgress || ts.stepIdx <= -1) ? "default" : "pointer", padding: "3px 10px", opacity: (growing || buildProgress || ts.stepIdx <= -1) ? 0.3 : 1, fontSize: 11 }}>◀</button>
+            style={{ ...inp, cursor: (growing || buildProgress || ts.stepIdx <= -1) ? "default" : "pointer", padding: "3px 10px", opacity: (growing || buildProgress || ts.stepIdx <= -1) ? 0.3 : 1, fontSize: 11, transition: "background 0.15s" }}
+            onMouseEnter={e => { if (!growing && !buildProgress && ts.stepIdx > -1) e.currentTarget.style.background = "#1e2840"; }}
+            onMouseLeave={e => { e.currentTarget.style.background = "#161c2a"; }}>◀</button>
           <span style={{ fontSize: 10, color: C.muted, minWidth: 72, textAlign: "center", userSelect: "none" }}>
             {ts.stepIdx === -1 ? "ready" : `${ts.stepIdx + 1} / ${totalSteps}`}
           </span>
           <button disabled={growing || !!buildProgress || ts.stepIdx >= totalSteps - 1} onClick={() => { setHintDismissed(true); goToStep(curTree, ts.stepIdx + 1); }}
-            style={{ ...inp, cursor: (growing || buildProgress || ts.stepIdx >= totalSteps - 1) ? "default" : "pointer", padding: "3px 10px", opacity: (growing || buildProgress || ts.stepIdx >= totalSteps - 1) ? 0.3 : 1, fontSize: 11 }}>▶</button>
+            style={{ ...inp, cursor: (growing || buildProgress || ts.stepIdx >= totalSteps - 1) ? "default" : "pointer", padding: "3px 10px", opacity: (growing || buildProgress || ts.stepIdx >= totalSteps - 1) ? 0.3 : 1, fontSize: 11, transition: "background 0.15s" }}
+            onMouseEnter={e => { if (!growing && !buildProgress && ts.stepIdx < totalSteps - 1) e.currentTarget.style.background = "#1e2840"; }}
+            onMouseLeave={e => { e.currentTarget.style.background = "#161c2a"; }}>▶</button>
 
           {/* Bootstrap info */}
           {curBootstrap && (
@@ -2104,9 +1162,32 @@ export default function RandomForestViz({ mode = "random-forest" }) {
             </span>
           )}
 
-          {/* Reset */}
-          <button onClick={() => setTS(curTree, EMPTY_TS)} disabled={growing}
-            style={{ ...inp, cursor: "pointer", padding: "3px 10px", fontSize: 10, opacity: growing ? 0.3 : 1 }}>Reset</button>
+          {/* Reset — single click: current tree · double click: all trees */}
+          <button
+            disabled={growing}
+            onMouseEnter={e => {
+              setResetTooltip(tooltipPosition(e.currentTarget.getBoundingClientRect(), { prefer: 'above', width: 272, height: 28 }));
+            }}
+            onMouseLeave={() => setResetTooltip(null)}
+            onClick={() => {
+              if (resetClickRef.current) return;
+              resetClickRef.current = setTimeout(() => {
+                resetClickRef.current = null;
+                setTS(curTree, EMPTY_TS);
+              }, 220);
+            }}
+            onDoubleClick={() => {
+              clearTimeout(resetClickRef.current);
+              resetClickRef.current = null;
+              pausedAtRef.current = null;
+              setTreeStates({});
+              setCurTree(0);
+            }}
+            style={{ ...inp, cursor: growing ? "default" : "pointer", padding: "3px 10px", fontSize: 10, opacity: growing ? 0.3 : 1, transition: "background 0.15s" }}
+            onMouseEnter={e => { if (!growing) e.currentTarget.style.background = "#1e2840"; }}
+            onMouseLeave={e => { e.currentTarget.style.background = "#161c2a"; }}>
+            Reset
+          </button>
         </div>
       </div>
 
@@ -2127,13 +1208,17 @@ export default function RandomForestViz({ mode = "random-forest" }) {
         <div style={{ flex: 1, height: 1, background: `linear-gradient(to right, ${C.accent}40, transparent)` }} />
       </div>
 
+      {/* Canvas row — tree canvas + calculations sidebar side by side */}
+      <div style={{ display: "flex", alignItems: "stretch", height: Math.min(500, svgH + 40) }}>
+
       {/* SVG canvas */}
       <div ref={canvasRef}
         onMouseDown={onMouseDown} onMouseMove={onMouseMove}
         onMouseUp={onMouseUp} onMouseLeave={onMouseUp}
         style={{
+          flex: 1, minWidth: 0,
           overflow: "hidden", cursor: cursorGrabbing ? "grabbing" : "grab",
-          height: Math.min(500, svgH + 40), background: "#080c14",
+          background: "#080c14",
           boxShadow: "0 2px 16px rgba(0,0,0,0.4)",
           position: "relative",
         }}>
@@ -2207,9 +1292,9 @@ export default function RandomForestViz({ mode = "random-forest" }) {
           })}
         </svg>
 
-        {/* Floating zoom controls (bottom-right) */}
+        {/* Floating zoom controls (bottom-left) */}
         <div style={{
-          position: "absolute", bottom: 14, right: 14, zIndex: 10,
+          position: "absolute", bottom: 14, left: 14, zIndex: 10,
           display: "flex", flexDirection: "column", alignItems: "center", gap: 1,
           background: "rgba(10,14,23,0.92)",
           borderRadius: 12, padding: "6px 5px",
@@ -2250,6 +1335,318 @@ export default function RandomForestViz({ mode = "random-forest" }) {
           onMouseLeave={e => { e.currentTarget.style.color = C.dim; e.currentTarget.style.background = "none"; }}
           >Fit</button>
         </div>
+      </div>
+      {/* end SVG canvas */}
+
+      {/* ── Calculations sidebar ──────────────────────────────────────────── */}
+      <div style={{
+        width: calcExpanded ? calcPanelWidth : 28,
+        flexShrink: 0,
+        borderLeft: "1px solid rgba(255,255,255,0.05)",
+        background: "#080c14",
+        position: "relative",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+      }}>
+        {/* Drag handle / toggle — left edge of sidebar */}
+        <div
+          onMouseDown={onCalcHandleMouseDown}
+          title={calcExpanded ? "Drag to resize · Click to collapse" : "Click to expand"}
+          style={{
+            position: "absolute", left: 0, top: 0, bottom: 0,
+            width: 10, zIndex: 5,
+            cursor: calcExpanded ? "col-resize" : "pointer",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            borderRight: "1px solid rgba(255,255,255,0.05)",
+            background: "transparent",
+            transition: "background 0.15s",
+            userSelect: "none",
+          }}
+          onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.05)"; }}
+          onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
+        >
+          {calcExpanded ? (
+            /* Grip dots */
+            <div style={{ display: "flex", flexDirection: "column", gap: 3, pointerEvents: "none" }}>
+              {[0,1,2].map(i => (
+                <div key={i} style={{ width: 2, height: 2, borderRadius: "50%", background: C.dim, opacity: 0.5 }} />
+              ))}
+            </div>
+          ) : (
+            <span style={{ fontSize: 8, color: C.dim, pointerEvents: "none" }}>‹</span>
+          )}
+        </div>
+
+        {/* Collapsed state: rotated label */}
+        {!calcExpanded && (
+          <div style={{
+            position: "absolute", inset: 0, display: "flex",
+            alignItems: "center", justifyContent: "center", pointerEvents: "none",
+          }}>
+            <span style={{
+              fontSize: 8.5, color: C.muted, fontWeight: 500,
+              transform: "rotate(-90deg)", whiteSpace: "nowrap", letterSpacing: "0.08em",
+            }}>Calculations</span>
+          </div>
+        )}
+
+        {/* Expanded content */}
+        {calcExpanded && (
+          <div style={{
+            flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden",
+            paddingLeft: 12, /* leave room for the 10px drag handle */
+            scrollbarWidth: "thin", scrollbarColor: `${C.dimmer} transparent`,
+          }}>
+            <div style={{ fontSize: 9, color: C.muted, fontWeight: 500, padding: "10px 10px 6px 6px" }}>Calculations</div>
+
+            {/* Empty state */}
+            {!currentNode && (
+              <div style={{ padding: "12px 10px 12px 6px", color: C.dim, fontSize: 9.5 }}>
+                Press <span style={{ color: C.muted }}>▶ Grow</span> or use <span style={{ color: C.muted }}>→</span> to begin…
+              </div>
+            )}
+
+            {/* ── Leaf node ──────────────────────────────────────────── */}
+            {currentNode?.type === "leaf" && (() => {
+
+              // Regression leaf
+              if (currentNode.mean !== undefined) {
+                return (
+                  <div style={{ padding: "10px 10px 12px 6px" }}>
+                    <div style={{ fontSize: 8.5, color: C.muted, marginBottom: 8 }}>Leaf · Prediction</div>
+                    <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 10 }}>
+                      <div>
+                        <div style={{ fontSize: 8, color: C.muted, marginBottom: 2 }}>Mean</div>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: C.blue, fontFamily: "'JetBrains Mono',monospace" }}>
+                          {formatRegVal(currentNode.mean)}
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 8, color: C.muted, marginBottom: 2 }}>Variance</div>
+                        <div style={{ fontSize: 10, color: C.text, fontFamily: "'JetBrains Mono',monospace" }}>
+                          {currentNode.variance.toFixed(3)}
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 8, color: C.muted, marginBottom: 2 }}>n</div>
+                        <div style={{ fontSize: 10, color: C.text, fontFamily: "'JetBrains Mono',monospace" }}>
+                          {currentNode.samples}
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 8.5, color: C.muted }}>
+                      Range: <span style={{ color: C.text }}>{formatRegVal(currentNode.min)} – {formatRegVal(currentNode.max)}</span>
+                    </div>
+                  </div>
+                );
+              }
+
+              // Classification leaf
+              const predColor    = classColor(currentNode.prediction, classLabels);
+              const sortedCounts = Object.entries(currentNode.classCounts ?? {}).sort((a, b) => b[1] - a[1]);
+              const total = currentNode.samples;
+              let xCursor = 0;
+              const barSegs = classLabels.map(cls => {
+                const cnt = currentNode.classCounts?.[cls] ?? 0;
+                const pct = total > 0 ? (cnt / total) * 100 : 0;
+                const seg = { cls, cnt, pct, color: classColor(cls, classLabels), x: xCursor };
+                xCursor += pct;
+                return seg;
+              }).filter(s => s.pct > 0);
+              return (
+                <div style={{ padding: "10px 10px 12px 6px" }}>
+                  <div style={{ fontSize: 8.5, color: C.muted, marginBottom: 8 }}>Leaf · Prediction</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: predColor, fontFamily: "'JetBrains Mono',monospace" }}>
+                      {currentNode.prediction}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 8.5, color: C.muted, marginBottom: 6 }}>
+                    Gini <span style={{ color: C.text, fontFamily: "'JetBrains Mono',monospace" }}>{currentNode.impurity.toFixed(4)}</span>
+                    {"  "}n = <span style={{ color: C.text, fontFamily: "'JetBrains Mono',monospace" }}>{currentNode.samples}</span>
+                  </div>
+                  <div style={{ height: 6, borderRadius: 3, overflow: "hidden", background: "rgba(255,255,255,0.05)", marginBottom: 6, display: "flex" }}>
+                    {barSegs.map(s => (
+                      <div key={s.cls} style={{ width: `${s.pct}%`, background: s.color, transition: "width .3s" }} />
+                    ))}
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "3px 10px" }}>
+                    {sortedCounts.map(([cls, cnt]) => (
+                      <div key={cls} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 8.5 }}>
+                        <div style={{ width: 6, height: 6, borderRadius: 1.5, background: classColor(cls, classLabels), flexShrink: 0 }} />
+                        <span style={{ color: C.dim }}>{cls}</span>
+                        <span style={{ color: C.text, fontFamily: "'JetBrains Mono',monospace" }}>{cnt}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* ── Split node ────────────────────────────────────────── */}
+            {currentNode?.type === "split" && (() => {
+              const candidateEvals = (currentNode.allFeatureEvals ?? [])
+                .filter(ev => currentNode.candidateIndices.includes(ev.featureIndex))
+                .sort((a, b) => a.gini - b.gini);
+              const maxGini = Math.max(...candidateEvals.map(e => e.gini), 0.001);
+
+              return (<>
+                {/* ① Node header */}
+                <div style={{ padding: "10px 10px 8px 6px" }}>
+                  <div style={{ fontSize: 9, color: C.text, fontWeight: 600, marginBottom: 4 }}>
+                    Depth {currentNode.depth} · {currentNode.samples} samples
+                  </div>
+                  {ts.phase === 0 && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
+                      <div style={{ display: "flex", gap: 2, alignItems: "center" }}>
+                        {[0,1,2].map(i => (
+                          <div key={i} style={{
+                            width: 4, height: 4, borderRadius: "50%",
+                            background: C.accent, opacity: 0.3 + i * 0.3,
+                            animation: `growPulse ${1 + i * 0.2}s ease-in-out infinite`,
+                          }} />
+                        ))}
+                      </div>
+                      <span style={{ fontSize: 8.5, color: C.dim }}>
+                        Sampling {currentNode.candidateIndices?.length ?? "?"} of {activeFeatures.length}…
+                      </span>
+                    </div>
+                  )}
+                  {ts.phase >= 1 && (() => {
+                    const names = currentNode.candidateIndices.map(i => activeFeatures[i]);
+                    const MAX = 5;
+                    const shown = names.slice(0, MAX);
+                    const extra = names.length - MAX;
+                    return (
+                      <div style={{ marginTop: 4, fontSize: 8.5, color: C.dim, lineHeight: 1.55, wordBreak: "break-word" }}>
+                        Evaluating{" "}
+                        <span style={{ color: `${C.accent}cc` }}>
+                          {shown.join(", ")}
+                          {extra > 0 && <span style={{ color: C.dim }}>{` … and ${extra} more`}</span>}
+                        </span>
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {/* ② Gini bar chart — phase 1+ */}
+                {ts.phase >= 1 && (
+                  <div style={{ borderTop: "1px solid rgba(255,255,255,0.05)", padding: "10px 10px 10px 6px" }}>
+                    <div style={{ fontSize: 8.5, color: C.dim, marginBottom: 7 }}>
+                      {activeTaskType === "regression" ? "MSE" : "Gini"} per candidate{" "}
+                      <span style={{ color: C.muted }}>(shorter = better)</span>
+                    </div>
+                    {/*
+                      CSS Grid: 3 columns — name (auto), bar (1fr), value (40px).
+                      "auto" sizes to the widest name, giving names priority for space.
+                      "1fr" fills whatever remains, so bars grow only after all names fit.
+                      All 3 cells per row are direct grid children so bars column-align.
+                    */}
+                    <div style={{
+                      display: "grid",
+                      gridTemplateColumns: "auto minmax(20px, 1fr) 40px",
+                      columnGap: 8,
+                      rowGap: 5,
+                      alignItems: "center",
+                      overflow: "hidden",
+                    }}>
+                      {candidateEvals.map((ev, j) => {
+                        const isChosen = ts.phase >= 2 && ev.featureIndex === currentNode.featureIndex;
+                        const barPct = maxGini > 0 ? (ev.gini / maxGini) * 100 : 50;
+                        const rowColor = isChosen ? C.green : C.dim;
+                        const fadeStyle = {
+                          opacity: 0,
+                          animation: `taxFadeIn 0.25s ease ${j * 0.06}s forwards`,
+                        };
+                        return [
+                          /* Feature name cell */
+                          <div key={`n${ev.featureIndex}`} style={{
+                            ...fadeStyle,
+                            fontSize: 8.5, color: rowColor, fontWeight: isChosen ? 600 : 400,
+                            whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                            minWidth: 0, transition: "color .2s",
+                          }} title={activeFeatures[ev.featureIndex]}>
+                            {activeFeatures[ev.featureIndex]}
+                          </div>,
+                          /* Bar cell */
+                          <div key={`b${ev.featureIndex}`} style={{
+                            ...fadeStyle,
+                            height: 4, background: "rgba(255,255,255,0.05)",
+                            borderRadius: 2, overflow: "hidden",
+                          }}>
+                            <div style={{
+                              height: "100%", width: `${barPct}%`,
+                              background: isChosen ? C.green : `${C.accent}88`,
+                              borderRadius: 2,
+                              transition: "width 0.4s ease-out, background 0.2s",
+                            }} />
+                          </div>,
+                          /* Gini value cell */
+                          <div key={`v${ev.featureIndex}`} style={{
+                            ...fadeStyle,
+                            fontSize: 8, color: rowColor, fontFamily: "'JetBrains Mono',monospace",
+                            textAlign: "right", whiteSpace: "nowrap", transition: "color .2s",
+                          }}>
+                            {ev.gini.toFixed(3)}{isChosen && <span style={{ marginLeft: 3, fontSize: 7 }}>✓</span>}
+                          </div>,
+                        ];
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* ③ Global-best warning — phase 2 */}
+                {ts.phase >= 2 && currentNode.globalBestIdx !== currentNode.featureIndex && (
+                  <div style={{
+                    borderTop: "1px solid rgba(255,255,255,0.05)",
+                    margin: "0 10px 8px 6px",
+                    padding: "8px 10px",
+                    borderRadius: 7,
+                    background: `${C.accent}0a`,
+                    borderLeft: `3px solid ${C.accent}88`,
+                    fontSize: 8.5, color: C.dim, lineHeight: 1.6,
+                  }}>
+                    <span style={{ color: `${C.accent}cc`, fontWeight: 600 }}>Subset missed global best</span>
+                    <br />
+                    <span style={{ fontFamily: "'JetBrains Mono',monospace", color: C.text, wordBreak: "break-word" }}>
+                      {activeFeatures[currentNode.globalBestIdx]}
+                    </span>{" "}
+                    had {activeTaskType === "regression" ? "MSE" : "G"}={currentNode.globalBestGini.toFixed(4)} but wasn't in subset
+                  </div>
+                )}
+
+                {/* ④ Split result card — phase 2 */}
+                {ts.phase >= 2 && (
+                  <div style={{ borderTop: "1px solid rgba(255,255,255,0.05)", padding: "10px 10px 12px 6px" }}>
+                    <div style={{ fontSize: 8.5, color: C.dim, marginBottom: 5 }}>Split decision</div>
+                    <div style={{
+                      padding: "8px 10px", borderRadius: 7,
+                      background: `${C.green}0f`,
+                      borderLeft: `3px solid ${C.green}88`,
+                    }}>
+                      <div style={{
+                        fontSize: 10, fontWeight: 700, color: C.green,
+                        fontFamily: "'JetBrains Mono',monospace",
+                        wordBreak: "break-all", marginBottom: 3,
+                      }} title={currentNode.featureName}>
+                        {currentNode.featureName}
+                      </div>
+                      <div style={{ fontSize: 9.5, color: C.dim, fontFamily: "'JetBrains Mono',monospace" }}>
+                        ≤ {currentNode.threshold}
+                      </div>
+                      <div style={{ fontSize: 8.5, color: C.muted, marginTop: 2 }}>
+                        {activeTaskType === "regression" ? "MSE" : "G"}={currentNode.gini.toFixed(4)}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </>);
+            })()}
+          </div>
+        )}
+      </div>
+      {/* end canvas row flex */}
       </div>
 
       {/* Feature pool */}
@@ -2324,277 +1721,6 @@ export default function RandomForestViz({ mode = "random-forest" }) {
           })}
           </div>
         </div>
-      </div>
-
-      {/* Calculations panel */}
-      <div style={{ padding: "6px 16px 10px" }}>
-        <div style={{ fontSize: 9, color: C.muted, fontWeight: 500, marginBottom: 6 }}>Calculations</div>
-        <div style={{
-          background: "#0c1018", borderRadius: 12,
-          boxShadow: "0 2px 16px rgba(0,0,0,0.35), inset 0 0 0 1px rgba(255,255,255,0.04)",
-          overflow: "hidden",
-        }}>
-
-          {/* Empty state */}
-          {!currentNode && (
-            <div style={{ padding: "18px 16px", color: C.dim, fontSize: 10.5 }}>
-              Press <span style={{ color: C.muted }}>▶ Grow</span> or use <span style={{ color: C.muted }}>→</span> to begin…
-            </div>
-          )}
-
-          {/* ── Leaf node ──────────────────────────────────────────────────────── */}
-          {currentNode?.type === "leaf" && (() => {
-
-            // ── Regression leaf ─────────────────────────────────────────────────
-            if (currentNode.mean !== undefined) {
-              return (
-                <div style={{ padding: "16px 16px" }}>
-                  <div style={{ fontSize: 9, color: C.muted, marginBottom: 10 }}>Leaf node · Prediction</div>
-                  <div style={{ display: "flex", gap: 20, flexWrap: "wrap", marginBottom: 12 }}>
-                    <div>
-                      <div style={{ fontSize: 9, color: C.muted, marginBottom: 2 }}>Mean</div>
-                      <div style={{ fontSize: 15, fontWeight: 700, color: C.blue, fontFamily: "'JetBrains Mono',monospace" }}>
-                        {formatRegVal(currentNode.mean)}
-                      </div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 9, color: C.muted, marginBottom: 2 }}>Variance</div>
-                      <div style={{ fontSize: 12, color: C.text, fontFamily: "'JetBrains Mono',monospace" }}>
-                        {currentNode.variance.toFixed(3)}
-                      </div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 9, color: C.muted, marginBottom: 2 }}>n</div>
-                      <div style={{ fontSize: 12, color: C.text, fontFamily: "'JetBrains Mono',monospace" }}>
-                        {currentNode.samples}
-                      </div>
-                    </div>
-                  </div>
-                  <div style={{ fontSize: 9, color: C.muted }}>
-                    Range: <span style={{ color: C.text }}>{formatRegVal(currentNode.min)} – {formatRegVal(currentNode.max)}</span>
-                  </div>
-                </div>
-              );
-            }
-
-            // ── Classification leaf ──────────────────────────────────────────────
-            const predColor    = classColor(currentNode.prediction, classLabels);
-            const sortedCounts = Object.entries(currentNode.classCounts ?? {}).sort((a, b) => b[1] - a[1]);
-            const total = currentNode.samples;
-            let xCursor = 0;
-            const barSegs = classLabels.map(cls => {
-              const cnt = currentNode.classCounts?.[cls] ?? 0;
-              const pct = total > 0 ? (cnt / total) * 100 : 0;
-              const seg = { cls, cnt, pct, color: classColor(cls, classLabels), x: xCursor };
-              xCursor += pct;
-              return seg;
-            }).filter(s => s.pct > 0);
-            return (
-              <div style={{ padding: "16px 16px" }}>
-                <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 12 }}>
-                  <span style={{ fontSize: 9, color: C.muted }}>Leaf node · Prediction</span>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
-                  <div style={{
-                    fontSize: 15, fontWeight: 700, color: predColor,
-                    fontFamily: "'JetBrains Mono',monospace",
-                  }}>{currentNode.prediction}</div>
-                  <div style={{ fontSize: 9, color: C.muted }}>
-                    Gini <span style={{ color: C.text, fontFamily: "'JetBrains Mono',monospace" }}>{currentNode.impurity.toFixed(4)}</span>
-                    <span style={{ marginLeft: 8 }}>n = <span style={{ color: C.text, fontFamily: "'JetBrains Mono',monospace" }}>{currentNode.samples}</span></span>
-                  </div>
-                </div>
-
-                {/* Stacked distribution bar */}
-                <div style={{ height: 8, borderRadius: 4, overflow: "hidden", background: "rgba(255,255,255,0.05)", marginBottom: 8, display: "flex" }}>
-                  {barSegs.map(s => (
-                    <div key={s.cls} style={{ width: `${s.pct}%`, background: s.color, transition: "width .3s" }} />
-                  ))}
-                </div>
-
-                {/* Class count legend */}
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px" }}>
-                  {sortedCounts.map(([cls, cnt]) => (
-                    <div key={cls} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 9 }}>
-                      <div style={{ width: 7, height: 7, borderRadius: 2, background: classColor(cls, classLabels), flexShrink: 0 }} />
-                      <span style={{ color: C.dim }}>{cls}</span>
-                      <span style={{ color: C.text, fontFamily: "'JetBrains Mono',monospace" }}>{cnt}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            );
-          })()}
-
-          {/* ── Split node ─────────────────────────────────────────────────────── */}
-          {currentNode?.type === "split" && (() => {
-            const candidateEvals = (currentNode.allFeatureEvals ?? [])
-              .filter(ev => currentNode.candidateIndices.includes(ev.featureIndex))
-              .sort((a, b) => a.gini - b.gini); // sorted best-first for bar chart
-
-            // Gini range for bar normalisation — use the worst gini as max bar width
-            const maxGini = Math.max(...candidateEvals.map(e => e.gini), 0.001);
-
-            return (<>
-              {/* ① Node header — always visible */}
-              <div style={{ padding: "14px 16px 12px" }}>
-                <div style={{ fontSize: 10, color: C.text, fontWeight: 600, marginBottom: 2 }}>
-                  Depth {currentNode.depth} · {currentNode.samples} samples
-                </div>
-                {ts.phase === 0 && (
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
-                    <div style={{
-                      display: "flex", gap: 3, alignItems: "center",
-                    }}>
-                      {[0,1,2].map(i => (
-                        <div key={i} style={{
-                          width: 5, height: 5, borderRadius: "50%",
-                          background: C.accent, opacity: 0.3 + i * 0.3,
-                          animation: `growPulse ${1 + i * 0.2}s ease-in-out infinite`,
-                        }} />
-                      ))}
-                    </div>
-                    <span style={{ fontSize: 9.5, color: C.dim }}>
-                      Sampling {currentNode.candidateIndices?.length ?? "?"} of {activeFeatures.length} features…
-                    </span>
-                  </div>
-                )}
-                {ts.phase >= 1 && (
-                  <div style={{ marginTop: 4, fontSize: 9, color: C.dim, lineHeight: 1.6 }}>
-                    Evaluating{" "}
-                    <span style={{ color: `${C.accent}cc` }}>
-                      {currentNode.candidateIndices.map(i => activeFeatures[i]).join(", ")}
-                    </span>
-                  </div>
-                )}
-              </div>
-
-              {/* ② Gini bar chart — phase 1+ */}
-              {ts.phase >= 1 && (
-                <div style={{
-                  borderTop: "1px solid rgba(255,255,255,0.05)",
-                  padding: "12px 16px",
-                }}>
-                  <div style={{ fontSize: 9, color: C.dim, marginBottom: 8 }}>{activeTaskType === "regression" ? "MSE" : "Gini"} per candidate <span style={{ color: C.muted }}>(shorter = better)</span></div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                    {candidateEvals.map((ev, j) => {
-                      const isChosen = ts.phase >= 2 && ev.featureIndex === currentNode.featureIndex;
-                      const barPct = maxGini > 0 ? (ev.gini / maxGini) * 100 : 50;
-                      const rowColor = isChosen ? C.green : C.dim;
-                      return (
-                        <div key={ev.featureIndex} style={{
-                          display: "flex", alignItems: "center", gap: 8,
-                          opacity: 0,
-                          animation: `taxFadeIn 0.25s ease ${j * 0.06}s forwards`,
-                        }}>
-                          {/* Feature name */}
-                          <div style={{
-                            width: 110, fontSize: 9, color: rowColor, fontWeight: isChosen ? 600 : 400,
-                            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                            flexShrink: 0, transition: "color .2s",
-                          }}>
-                            {activeFeatures[ev.featureIndex]}
-                          </div>
-                          {/* Bar */}
-                          <div style={{ flex: 1, height: 5, background: "rgba(255,255,255,0.05)", borderRadius: 3, overflow: "hidden" }}>
-                            <div style={{
-                              height: "100%",
-                              width: `${barPct}%`,
-                              background: isChosen ? C.green : `${C.accent}88`,
-                              borderRadius: 3,
-                              transition: "width 0.4s ease-out, background 0.2s",
-                            }} />
-                          </div>
-                          {/* Gini value */}
-                          <div style={{
-                            fontSize: 9, color: rowColor, fontFamily: "'JetBrains Mono',monospace",
-                            flexShrink: 0, width: 46, textAlign: "right",
-                            transition: "color .2s",
-                          }}>
-                            {ev.gini.toFixed(4)}
-                            {isChosen && <span style={{ marginLeft: 4, fontSize: 8 }}>✓</span>}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* ③ Global-best warning — phase 2 only, when subset missed the true best */}
-              {ts.phase >= 2 && currentNode.globalBestIdx !== currentNode.featureIndex && (
-                <div style={{
-                  borderTop: "1px solid rgba(255,255,255,0.05)",
-                  margin: "0 16px",
-                  padding: "10px 12px",
-                  borderRadius: 8,
-                  background: `${C.accent}0a`,
-                  borderLeft: `3px solid ${C.accent}88`,
-                  marginBottom: 10,
-                  fontSize: 9, color: C.dim, lineHeight: 1.65,
-                }}>
-                  <span style={{ color: `${C.accent}cc`, fontWeight: 600 }}>Subset missed global best</span>
-                  <br />
-                  <span style={{ fontFamily: "'JetBrains Mono',monospace", color: C.text }}>
-                    {activeFeatures[currentNode.globalBestIdx]}
-                  </span>{" "}
-                  had {activeTaskType === "regression" ? "MSE" : "G"}={currentNode.globalBestGini.toFixed(4)} but wasn't sampled into the subset
-                </div>
-              )}
-
-              {/* ④ Split result card — phase 2 */}
-              {ts.phase >= 2 && (
-                <div style={{
-                  borderTop: "1px solid rgba(255,255,255,0.05)",
-                  padding: "12px 16px",
-                }}>
-                  <div style={{ fontSize: 9, color: C.dim, marginBottom: 6 }}>Split decision</div>
-                  <div style={{
-                    display: "flex", alignItems: "baseline", gap: 6,
-                    padding: "10px 12px", borderRadius: 8,
-                    background: `${C.green}0f`,
-                    borderLeft: `3px solid ${C.green}88`,
-                  }}>
-                    <span style={{
-                      fontSize: 12, fontWeight: 700, color: C.green,
-                      fontFamily: "'JetBrains Mono',monospace",
-                    }}>
-                      {currentNode.featureName}
-                    </span>
-                    <span style={{ fontSize: 11, color: C.dim, fontFamily: "'JetBrains Mono',monospace" }}>
-                      ≤ {currentNode.threshold}
-                    </span>
-                    <span style={{ fontSize: 9, color: C.muted, marginLeft: 4 }}>
-                      {activeTaskType === "regression" ? "MSE" : "G"}={currentNode.gini.toFixed(4)}
-                    </span>
-                  </div>
-                </div>
-              )}
-            </>);
-          })()}
-        </div>
-
-        {/* ↓ Back to prediction — appears when a sample is selected */}
-        {selectedSample && (
-          <button
-            onClick={() => predSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
-            style={{
-              position: "absolute", bottom: 10, right: 10,
-              padding: "5px 13px", borderRadius: 20,
-              background: "rgba(10,14,23,0.78)", backdropFilter: "blur(6px)",
-              border: `1px solid rgba(255,255,255,0.1)`,
-              color: C.muted, fontSize: 10, fontWeight: 600,
-              cursor: "pointer", fontFamily: "inherit",
-              boxShadow: "0 2px 12px rgba(0,0,0,0.4)",
-              transition: "color 0.15s, border-color 0.15s",
-              zIndex: 6,
-            }}
-            onMouseEnter={e => { e.currentTarget.style.color = C.text; e.currentTarget.style.borderColor = "rgba(255,255,255,0.22)"; }}
-            onMouseLeave={e => { e.currentTarget.style.color = C.muted; e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; }}
-          >
-            ↓ Back to prediction
-          </button>
-        )}
       </div>
 
       {/* ── Scroll-down hint — fades in when all trees done ─────────────────── */}
@@ -2678,50 +1804,40 @@ export default function RandomForestViz({ mode = "random-forest" }) {
               </div>
             )}
 
-            {/* ── Prominent sample selector (Spotlight style) ──────────────── */}
-            <div style={{
-              position: "relative",
-              display: "flex",
-              alignItems: "center",
-              marginBottom: 20,
-              borderRadius: 16,
-              background: "rgba(255,255,255,0.04)",
-              boxShadow: "0 8px 32px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.08), inset 0 1px 0 rgba(255,255,255,0.06)",
-              overflow: "hidden",
-            }}>
-              {/* Search icon */}
-              <div style={{ padding: "0 14px 0 18px", color: C.dim, fontSize: 16, flexShrink: 0, pointerEvents: "none" }}>
-                ⌕
+            {/* ── Sample selector ───────────────────────────────────────────── */}
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+              <div style={{
+                position: "relative", display: "flex", alignItems: "center",
+                borderRadius: 16, background: "rgba(255,255,255,0.04)",
+                boxShadow: "0 8px 32px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.08)",
+                maxWidth: 500, flex: 1,
+              }}>
+                <div style={{ padding: "0 14px 0 18px", color: C.dim, fontSize: 16, flexShrink: 0 }}>⌕</div>
+                <select
+                  value={safeSampleIdx ?? ""}
+                  onChange={e => setSelectedSampleIdx(e.target.value === "" ? null : +e.target.value)}
+                  style={{
+                    flex: 1, minWidth: 0, background: "transparent", border: "none",
+                    color: C.text, fontSize: 12, padding: "12px 8px 12px 0",
+                    outline: "none", fontFamily: "inherit", cursor: "pointer",
+                  }}
+                >
+                  <option value="">Select a sample to predict…</option>
+                  {activeData.map((row, i) => (
+                    <option key={i} value={i}>{formatSampleLabel(row, activeFeatures, i)}</option>
+                  ))}
+                </select>
               </div>
-              <select
-                value={safeSampleIdx ?? ""}
-                onChange={e => setSelectedSampleIdx(e.target.value === "" ? null : +e.target.value)}
-                style={{
-                  flex: 1, minWidth: 0, background: "transparent", border: "none",
-                  color: safeSampleIdx !== null ? C.text : C.muted,
-                  fontSize: 13, fontFamily: "'JetBrains Mono',monospace",
-                  padding: "15px 8px 15px 0", outline: "none",
-                  cursor: "pointer", appearance: "none", WebkitAppearance: "none",
-                }}
-              >
-                <option value="">Pick a sample to predict…</option>
-                {activeData.map((row, i) => (
-                  <option key={i} value={i}>{formatSampleLabel(row, activeFeatures, i)}</option>
-                ))}
-              </select>
-              {/* Random pill */}
               <button
                 onClick={() => setSelectedSampleIdx(Math.floor(Math.random() * activeData.length))}
                 style={{
-                  flexShrink: 0, margin: "8px 10px 8px 4px",
-                  padding: "6px 16px", borderRadius: 20, border: "none",
-                  background: "rgba(255,255,255,0.07)", color: C.muted, fontSize: 11,
-                  cursor: "pointer", fontFamily: "inherit", fontWeight: 600,
-                  transition: "color .15s, background .15s",
-                  boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.1)",
+                  flexShrink: 0, padding: "6px 14px", borderRadius: 20, border: "none",
+                  background: `${C.accent}22`, color: C.accent, fontSize: 11,
+                  fontFamily: "inherit", cursor: "pointer", fontWeight: 600,
+                  transition: "background 0.15s, box-shadow 0.15s",
                 }}
-                onMouseEnter={e => { e.currentTarget.style.color = C.text; e.currentTarget.style.background = "rgba(255,255,255,0.13)"; }}
-                onMouseLeave={e => { e.currentTarget.style.color = C.muted; e.currentTarget.style.background = "rgba(255,255,255,0.07)"; }}
+                onMouseEnter={e => { e.currentTarget.style.background = `${C.accent}38`; e.currentTarget.style.boxShadow = "0 0 10px rgba(245,158,11,0.2)"; }}
+                onMouseLeave={e => { e.currentTarget.style.background = `${C.accent}22`; e.currentTarget.style.boxShadow = "none"; }}
               >
                 Random
               </button>
@@ -2734,13 +1850,14 @@ export default function RandomForestViz({ mode = "random-forest" }) {
               </div>
             )}
 
-            {/* ── Per-tree vote cards ─────────────────────────────────────────── */}
-            {selectedSample && (
-              <>
-                <div style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
+            {/* ── Per-tree vote cards + ensemble ──────────────────────────────── */}
+            {selectedSample && (() => {
+              // Shared tree card renderer
+              const treeCards = (
+                <div style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center" }}>
                   {trees.map((_, i) => {
-                    const spt     = sampleTreePreds.find(t => t.idx === i);
-                    const hasPred = spt !== undefined;
+                    const spt      = sampleTreePreds.find(t => t.idx === i);
+                    const hasPred  = spt !== undefined;
                     const isActive = i === curTree;
 
                     if (activeTaskType === "regression") {
@@ -2758,7 +1875,9 @@ export default function RandomForestViz({ mode = "random-forest" }) {
                               : hasPred ? `inset 0 0 0 1px ${C.blue}44` : "inset 0 0 0 1px rgba(255,255,255,0.06)",
                             transition: "box-shadow .2s, background .2s",
                             fontFamily: "'JetBrains Mono',monospace",
-                          }}>
+                          }}
+                          onMouseEnter={e => { e.currentTarget.style.background = hasPred ? `${C.blue}28` : "rgba(255,255,255,0.07)"; }}
+                          onMouseLeave={e => { e.currentTarget.style.background = hasPred ? `${C.blue}18` : "rgba(255,255,255,0.03)"; }}>
                           <div style={{ fontSize: 7, color: isActive ? C.text : C.dim }}>T{i + 1}</div>
                           <div style={{ fontSize: 9, fontWeight: 700, color: hasPred ? C.blue : C.dimmer, whiteSpace: "nowrap" }}>
                             {predStr}
@@ -2767,9 +1886,9 @@ export default function RandomForestViz({ mode = "random-forest" }) {
                       );
                     }
 
-                    const pred    = spt?.samplePred;
-                    const color   = pred ? classColor(pred, classLabels) : C.dimmer;
-                    const abbrev  = pred && pred.length > 9 ? pred.slice(0, 8) + "…" : pred;
+                    const pred   = spt?.samplePred;
+                    const color  = pred ? classColor(pred, classLabels) : C.dimmer;
+                    const abbrev = pred && pred.length > 9 ? pred.slice(0, 8) + "…" : pred;
                     return (
                       <button key={i} onClick={() => setCurTree(i)}
                         title={`T${i + 1}: ${pred ?? "not yet grown"}`}
@@ -2783,7 +1902,9 @@ export default function RandomForestViz({ mode = "random-forest" }) {
                             : pred ? `inset 0 0 0 1px ${color}44` : "inset 0 0 0 1px rgba(255,255,255,0.06)",
                           transition: "box-shadow .2s, background .2s",
                           fontFamily: "'JetBrains Mono',monospace",
-                        }}>
+                        }}
+                        onMouseEnter={e => { e.currentTarget.style.background = pred ? `${color}28` : "rgba(255,255,255,0.07)"; }}
+                        onMouseLeave={e => { e.currentTarget.style.background = pred ? `${color}18` : "rgba(255,255,255,0.03)"; }}>
                         <div style={{ fontSize: 7, color: isActive ? C.text : C.dim }}>T{i + 1}</div>
                         <div style={{ fontSize: 9, fontWeight: 700, color: pred ? color : C.dimmer, whiteSpace: "nowrap" }}>
                           {pred ? abbrev : "…"}
@@ -2792,61 +1913,71 @@ export default function RandomForestViz({ mode = "random-forest" }) {
                     );
                   })}
                 </div>
+              );
 
-                {/* ── Ensemble result — prominent card ────────────────────────── */}
-                {activeTaskType === "regression" && sampleMean !== null && (() => {
-                  const err = sampleTrueLabel !== null ? Math.abs(sampleMean - sampleTrueLabel) : null;
-                  const relErr = err !== null && Math.abs(sampleTrueLabel) > 0 ? err / Math.abs(sampleTrueLabel) : null;
+              // ── Decision Tree: original stacked layout (single tree, no ensemble) ──
+              if (mode === "decision-tree") {
+                return (
+                  <>
+                    <div style={{ marginBottom: 14 }}>{treeCards}</div>
+                  </>
+                );
+              }
+
+              // ── Bagging / Random Forest: ensemble card left, tree cards right ────
+              const ensembleCard = (() => {
+                if (activeTaskType === "regression" && sampleMean !== null) {
+                  const err      = sampleTrueLabel !== null ? Math.abs(sampleMean - sampleTrueLabel) : null;
+                  const relErr   = err !== null && Math.abs(sampleTrueLabel) > 0 ? err / Math.abs(sampleTrueLabel) : null;
                   const errColor = relErr !== null ? (relErr < 0.1 ? C.green : relErr < 0.25 ? C.orange : C.red) : C.muted;
                   return (
                     <div style={{
-                      marginBottom: 16, padding: "18px 20px",
-                      borderRadius: 14,
+                      flexShrink: 0, width: 210, alignSelf: "stretch",
+                      padding: "16px 16px", borderRadius: 14,
                       background: `linear-gradient(135deg, ${C.blue}12, rgba(10,14,23,0.6))`,
                       boxShadow: `0 0 0 1.5px ${C.blue}55, 0 4px 24px ${C.blue}18, inset 0 1px 0 ${C.blue}22`,
+                      display: "flex", flexDirection: "column", justifyContent: "center",
                     }}>
-                      <div style={{ fontSize: 9, color: C.dim, fontWeight: 500, marginBottom: 6, letterSpacing: "0.06em", textTransform: "uppercase" }}>
-                        Ensemble prediction · {completedTrees.length} tree{completedTrees.length !== 1 ? "s" : ""}
+                      <div style={{ fontSize: 8.5, color: C.dim, fontWeight: 500, marginBottom: 6, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+                        Ensemble · {completedTrees.length} tree{completedTrees.length !== 1 ? "s" : ""}
                       </div>
-                      <div style={{ fontSize: 28, fontWeight: 800, color: C.blue, fontFamily: "'JetBrains Mono',monospace", lineHeight: 1, marginBottom: 10 }}>
+                      <div style={{ fontSize: 26, fontWeight: 800, color: C.blue, fontFamily: "'JetBrains Mono',monospace", lineHeight: 1, marginBottom: 10 }}>
                         {formatRegVal(sampleMean)}
                       </div>
                       {sampleTrueLabel !== null && (
-                        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                            <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.05em" }}>True</span>
-                            <span style={{ fontSize: 14, fontWeight: 700, color: C.text, fontFamily: "'JetBrains Mono',monospace" }}>{formatRegVal(sampleTrueLabel)}</span>
+                            <span style={{ fontSize: 8.5, color: C.muted, textTransform: "uppercase", letterSpacing: "0.05em" }}>True</span>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: C.text, fontFamily: "'JetBrains Mono',monospace" }}>{formatRegVal(sampleTrueLabel)}</span>
                           </div>
-                          <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.1)" }} />
                           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                            <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.05em" }}>Error</span>
-                            <span style={{ fontSize: 14, fontWeight: 700, color: errColor, fontFamily: "'JetBrains Mono',monospace" }}>{formatRegVal(err)}</span>
+                            <span style={{ fontSize: 8.5, color: C.muted, textTransform: "uppercase", letterSpacing: "0.05em" }}>Error</span>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: errColor, fontFamily: "'JetBrains Mono',monospace" }}>{formatRegVal(err)}</span>
                           </div>
                         </div>
                       )}
                     </div>
                   );
-                })()}
-
-                {/* ── Classification ensemble result — prominent card ───────────── */}
-                {activeTaskType === "classification" && sampleMajority && (() => {
+                }
+                if (activeTaskType === "classification" && sampleMajority) {
                   const majColor = classColor(sampleMajority, classLabels);
                   return (
                     <div style={{
-                      marginBottom: 16, padding: "18px 20px",
-                      borderRadius: 14,
+                      flexShrink: 0, width: 210, alignSelf: "stretch",
+                      padding: "16px 16px", borderRadius: 14,
                       background: `linear-gradient(135deg, ${majColor}12, rgba(10,14,23,0.6))`,
                       boxShadow: `0 0 0 1.5px ${majColor}55, 0 4px 24px ${majColor}18, inset 0 1px 0 ${majColor}22`,
+                      display: "flex", flexDirection: "column", justifyContent: "center",
                     }}>
-                      <div style={{ fontSize: 9, color: C.dim, fontWeight: 500, marginBottom: 6, letterSpacing: "0.06em", textTransform: "uppercase" }}>
-                        Ensemble prediction · {completedTrees.length} tree{completedTrees.length !== 1 ? "s" : ""}
+                      <div style={{ fontSize: 8.5, color: C.dim, fontWeight: 500, marginBottom: 5, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+                        Ensemble · {completedTrees.length} tree{completedTrees.length !== 1 ? "s" : ""}
                       </div>
-                      <div style={{ fontSize: 26, fontWeight: 800, color: majColor, lineHeight: 1, marginBottom: 10 }}>
+                      <div style={{ fontSize: 22, fontWeight: 800, color: majColor, lineHeight: 1, marginBottom: 10 }}>
                         {sampleMajority}
                       </div>
                       {/* Vote bar */}
-                      <div style={{ marginBottom: 10 }}>
-                        <div style={{ height: 6, borderRadius: 3, overflow: "hidden", background: "rgba(0,0,0,0.3)", display: "flex", marginBottom: 5 }}>
+                      <div style={{ marginBottom: 8 }}>
+                        <div style={{ height: 5, borderRadius: 3, overflow: "hidden", background: "rgba(0,0,0,0.3)", display: "flex", marginBottom: 5 }}>
                           {classLabels.map(cls => {
                             const pct = ((sampleVotesPerClass[cls] ?? 0) / completedTrees.length) * 100;
                             return pct > 0
@@ -2854,12 +1985,12 @@ export default function RandomForestViz({ mode = "random-forest" }) {
                               : null;
                           })}
                         </div>
-                        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                           {classLabels.map(cls => {
                             const n = sampleVotesPerClass[cls] ?? 0;
                             if (n === 0) return null;
                             return (
-                              <span key={cls} style={{ fontSize: 9, color: C.muted }}>
+                              <span key={cls} style={{ fontSize: 8.5, color: C.muted }}>
                                 <strong style={{ color: classColor(cls, classLabels), fontFamily: "'JetBrains Mono',monospace" }}>{n}</strong>
                                 <span style={{ color: C.dimmer }}>/{completedTrees.length} </span>
                                 <span style={{ color: classColor(cls, classLabels) }}>{cls}</span>
@@ -2869,23 +2000,41 @@ export default function RandomForestViz({ mode = "random-forest" }) {
                         </div>
                       </div>
                       {sampleTrueLabel !== null && (
-                        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center", paddingTop: 10, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                            <span style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: "0.05em" }}>True</span>
-                            <span style={{ fontSize: 14, fontWeight: 700, color: classColor(sampleTrueLabel, classLabels) }}>{sampleTrueLabel}</span>
+                        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", paddingTop: 8, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                            <span style={{ fontSize: 8.5, color: C.muted, textTransform: "uppercase", letterSpacing: "0.05em" }}>True</span>
+                            <span style={{ fontSize: 12, fontWeight: 700, color: classColor(sampleTrueLabel, classLabels) }}>{sampleTrueLabel}</span>
                           </div>
-                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                            <span style={{ fontSize: 14, fontWeight: 800, color: sampleCorrect ? C.green : C.red }}>
-                              {sampleCorrect ? "✓ Correct" : "✗ Wrong"}
-                            </span>
-                          </div>
+                          <span style={{ fontSize: 12, fontWeight: 800, color: sampleCorrect ? C.green : C.red }}>
+                            {sampleCorrect ? "✓ Correct" : "✗ Wrong"}
+                          </span>
                         </div>
                       )}
                     </div>
                   );
-                })()}
-              </>
-            )}
+                }
+                // No ensemble result yet (trees still growing)
+                return (
+                  <div style={{
+                    flexShrink: 0, width: 210, alignSelf: "stretch",
+                    padding: "16px 16px", borderRadius: 14,
+                    background: "rgba(255,255,255,0.02)",
+                    boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.06)",
+                    display: "flex", flexDirection: "column", justifyContent: "center",
+                  }}>
+                    <div style={{ fontSize: 8.5, color: C.dim, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>Ensemble</div>
+                    <div style={{ fontSize: 12, color: C.dimmer }}>Complete trees to see ensemble prediction.</div>
+                  </div>
+                );
+              })();
+
+              return (
+                <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 14 }}>
+                  {ensembleCard}
+                  {treeCards}
+                </div>
+              );
+            })()}
 
             {/* ── Metrics cards ───────────────────────────────────────────────── */}
             {activeTaskType === "classification" && (forestAccuracy !== null || avgOobAccuracy !== null) && (
@@ -2911,17 +2060,11 @@ export default function RandomForestViz({ mode = "random-forest" }) {
                     <div style={{ fontSize: 8, color: C.green, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 6, display: "flex", alignItems: "center", gap: 5 }}>
                       Out-of-Bag
                       <span style={{ cursor: "help", color: C.dim, fontWeight: 400 }}
-                        onMouseEnter={() => setOobTooltipVisible(true)}
-                        onMouseLeave={() => setOobTooltipVisible(false)}>ⓘ</span>
+                        onMouseEnter={e => setOobTooltipVisible(tooltipPosition(e.currentTarget.getBoundingClientRect(), { prefer: 'above', width: 260, height: 52 }))}
+                        onMouseLeave={() => setOobTooltipVisible(null)}>ⓘ</span>
                     </div>
                     <div style={{ fontSize: 9, color: C.muted, marginBottom: 2 }}>Accuracy</div>
                     <div style={{ fontSize: 20, fontWeight: 800, color: C.green, fontFamily: "'JetBrains Mono',monospace" }}>{avgOobAccuracy}%</div>
-                    {oobTooltipVisible && (
-                      <div style={{ position: "absolute", bottom: "calc(100% + 6px)", left: 0, width: 240, background: "#141b2d", borderRadius: 9, padding: "9px 12px", fontSize: 9.5, color: C.dim, lineHeight: 1.6, boxShadow: "0 8px 32px rgba(0,0,0,0.6), inset 0 0 0 1px rgba(255,255,255,0.08)", zIndex: 20, pointerEvents: "none" }}>
-                        Each tree is tested on the ~37% of samples not used in its bootstrap training set.
-                        This gives an unbiased estimate of generalization error with no held-out test set needed.
-                      </div>
-                    )}
                   </div>
                 )}
               </div>
@@ -2950,18 +2093,12 @@ export default function RandomForestViz({ mode = "random-forest" }) {
                     <div style={{ fontSize: 8, color: C.green, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 6, display: "flex", alignItems: "center", gap: 5 }}>
                       Out-of-Bag
                       <span style={{ cursor: "help", color: C.dim, fontWeight: 400 }}
-                        onMouseEnter={() => setOobTooltipVisible(true)}
-                        onMouseLeave={() => setOobTooltipVisible(false)}>ⓘ</span>
+                        onMouseEnter={e => setOobTooltipVisible(tooltipPosition(e.currentTarget.getBoundingClientRect(), { prefer: 'above', width: 260, height: 64 }))}
+                        onMouseLeave={() => setOobTooltipVisible(null)}>ⓘ</span>
                     </div>
                     <div style={{ fontSize: 9, color: C.muted, marginBottom: 2 }}>R²</div>
                     <div style={{ fontSize: 20, fontWeight: 800, color: C.green, fontFamily: "'JetBrains Mono',monospace" }}>{avgOobR2}</div>
                     <div style={{ fontSize: 9, color: C.muted, marginTop: 6 }}>RMSE <span style={{ color: C.green, fontFamily: "'JetBrains Mono',monospace", fontWeight: 700 }}>{avgOobRMSE}</span></div>
-                    {oobTooltipVisible && (
-                      <div style={{ position: "absolute", bottom: "calc(100% + 6px)", left: 0, width: 260, background: "#141b2d", borderRadius: 9, padding: "9px 12px", fontSize: 9.5, color: C.dim, lineHeight: 1.6, boxShadow: "0 8px 32px rgba(0,0,0,0.6), inset 0 0 0 1px rgba(255,255,255,0.08)", zIndex: 20, pointerEvents: "none" }}>
-                        R² measures proportion of variance explained. 1.0 is perfect, 0.0 is no better than predicting the mean.
-                        OOB estimates this on the ~37% of samples held out from each tree's bootstrap.
-                      </div>
-                    )}
                   </div>
                 )}
               </div>
@@ -2980,9 +2117,8 @@ export default function RandomForestViz({ mode = "random-forest" }) {
       {tabTooltip && (
         <div style={{
           position: "fixed",
-          left: tabTooltip.x,
-          top: tabTooltip.y,
-          transform: "translateX(-50%)",
+          left: tabTooltip.left,
+          top: tabTooltip.top,
           zIndex: 9999,
           background: "#1a2235",
           borderRadius: 7,
@@ -2994,6 +2130,99 @@ export default function RandomForestViz({ mode = "random-forest" }) {
           whiteSpace: "nowrap",
         }}>
           Double-click to instantly complete this tree
+        </div>
+      )}
+
+      {/* OOB tooltip */}
+      {oobTooltipVisible && (
+        <div style={{
+          position: "fixed", left: oobTooltipVisible.left, top: oobTooltipVisible.top,
+          width: 260, background: "#141b2d", borderRadius: 9, padding: "9px 12px",
+          fontSize: 9.5, color: C.dim, lineHeight: 1.6,
+          boxShadow: "0 8px 32px rgba(0,0,0,0.6), inset 0 0 0 1px rgba(255,255,255,0.08)",
+          zIndex: 9999, pointerEvents: "none",
+        }}>
+          {avgOobAccuracy !== null
+            ? "Each tree is tested on the ~37% of samples not used in its bootstrap training set. This gives an unbiased estimate of generalization error with no held-out test set needed."
+            : "R² measures proportion of variance explained. 1.0 is perfect, 0.0 is no better than predicting the mean. OOB estimates this on the ~37% of samples held out from each tree's bootstrap."}
+        </div>
+      )}
+
+      {/* Dataset dropdown menu — portaled to escape GlobalHeader stacking context */}
+      {rfDropOpen && rfDropPos && createPortal(
+        <div ref={rfMenuRef} className="rf-ds-drop-menu"
+          style={{ top: rfDropPos.top, left: rfDropPos.left }}>
+          <button className="rf-ds-opt"
+            data-active={!customDataset && builtinDataset === "heart" ? "true" : "false"}
+            onClick={() => { setRfDropOpen(false); switchToBuiltin("heart"); }}>
+            {!customDataset && builtinDataset === "heart" && <span style={{ fontSize: 9 }}>✓ </span>}
+            Built-in: Heart Disease (Binary classification)
+          </button>
+          <button className="rf-ds-opt"
+            data-active={!customDataset && builtinDataset === "music" ? "true" : "false"}
+            onClick={() => { setRfDropOpen(false); switchToBuiltin("music"); }}>
+            {!customDataset && builtinDataset === "music" && <span style={{ fontSize: 9 }}>✓ </span>}
+            Built-in: Music Genres (Multiclass classification)
+          </button>
+          <button className="rf-ds-opt"
+            data-active={!customDataset && builtinDataset === "salary" ? "true" : "false"}
+            onClick={() => { setRfDropOpen(false); switchToBuiltin("salary"); }}>
+            {!customDataset && builtinDataset === "salary" && <span style={{ fontSize: 9 }}>✓ </span>}
+            Built-in: Salary (Regression)
+          </button>
+          {customDataset && (
+            <button className="rf-ds-opt" data-active="true"
+              onClick={() => setRfDropOpen(false)}>
+              ✓ {customDataset.name}
+            </button>
+          )}
+          <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", margin: "4px 0" }} />
+          <button className="rf-ds-opt"
+            onClick={() => { setRfDropOpen(false); fileInputRef.current?.click(); }}>
+            ↑ Upload CSV…
+          </button>
+        </div>,
+        document.body
+      )}
+
+      {/* Locked-param tooltips (portaled to escape stacking contexts) */}
+      {lockedParamTooltip && createPortal(
+        <div style={{
+          position: "fixed", top: lockedParamTooltip.top, left: lockedParamTooltip.left,
+          width: 240, padding: "10px 13px", borderRadius: 10,
+          background: "#1a2235",
+          boxShadow: "0 8px 32px rgba(0,0,0,0.7), inset 0 0 0 1px rgba(255,255,255,0.12)",
+          fontSize: 10.5, color: C.text, lineHeight: 1.65,
+          fontWeight: 400, zIndex: 9999, pointerEvents: "none",
+          animation: "fadeInUp 0.14s ease-out",
+          whiteSpace: "normal",
+        }}>
+          {lockedParamTooltip.which === "maxFeatures"
+            ? (mode === "decision-tree"
+                ? "A decision tree evaluates all features at each split — switch to Random Forest for feature subsampling"
+                : "Bagging typically considers all features at each split — switch to Random Forest to enable feature subsampling")
+            : "A decision tree is a single model — switch to an ensemble"}
+        </div>,
+        document.body
+      )}
+
+      {/* Reset button tooltip */}
+      {resetTooltip && (
+        <div style={{
+          position: "fixed",
+          left: resetTooltip.left,
+          top: resetTooltip.top,
+          zIndex: 9999,
+          background: "#1a2235",
+          borderRadius: 7,
+          padding: "5px 10px",
+          fontSize: 9,
+          color: C.dim,
+          boxShadow: "0 4px 16px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(255,255,255,0.07)",
+          pointerEvents: "none",
+          whiteSpace: "nowrap",
+        }}>
+          Click to reset current tree · Double-click to reset all
         </div>
       )}
     </div>

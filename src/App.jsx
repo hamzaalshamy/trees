@@ -6,6 +6,7 @@ import AdaBoostViz from './AdaBoostViz'
 import About from './About'
 import { C } from './theme'
 import { TransitionProvider } from './PageTransition'
+import { TutorialProvider, useTutorial } from './Tutorial'
 
 function MobileOverlay() {
   const [dismissed, setDismissed] = useState(false)
@@ -72,6 +73,12 @@ function MobileOverlay() {
   )
 }
 
+// Thin wrapper so the /random-forest route gets the tutorial rfRef from context
+function RandomForestVizWithRef(props) {
+  const { rfRef } = useTutorial();
+  return <RandomForestViz {...props} tutorialRef={rfRef} />;
+}
+
 export default function App() {
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 900)
 
@@ -85,16 +92,18 @@ export default function App() {
     <>
       {isMobile && <MobileOverlay />}
       {!isMobile && (
-        <TransitionProvider>
-          <Routes>
-            <Route path="/" element={<TaxonomyMenu />} />
-            <Route path="/decision-tree" element={<RandomForestViz mode="decision-tree" />} />
-            <Route path="/bagging"       element={<RandomForestViz mode="bagging" />} />
-            <Route path="/random-forest" element={<RandomForestViz mode="random-forest" />} />
-            <Route path="/adaboost"      element={<AdaBoostViz />} />
-            <Route path="/about"         element={<About />} />
-          </Routes>
-        </TransitionProvider>
+        <TutorialProvider>
+          <TransitionProvider>
+            <Routes>
+              <Route path="/" element={<TaxonomyMenu />} />
+              <Route path="/decision-tree" element={<RandomForestViz mode="decision-tree" />} />
+              <Route path="/bagging"       element={<RandomForestViz mode="bagging" />} />
+              <Route path="/random-forest" element={<RandomForestVizWithRef mode="random-forest" />} />
+              <Route path="/adaboost"      element={<AdaBoostViz />} />
+              <Route path="/about"         element={<About />} />
+            </Routes>
+          </TransitionProvider>
+        </TutorialProvider>
       )}
     </>
   )

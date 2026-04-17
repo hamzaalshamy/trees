@@ -1,5 +1,6 @@
 import { usePageNavigate } from "./PageTransition";
 import { C } from "./theme";
+import { useTutorial } from "./Tutorial";
 
 /**
  * GlobalHeader — persistent top bar used on every page.
@@ -10,6 +11,7 @@ import { C } from "./theme";
  */
 export default function GlobalHeader({ right, infoBar }) {
   const navigate = usePageNavigate();
+  const { startTutorial } = useTutorial();
 
   return (
     <div
@@ -54,8 +56,21 @@ export default function GlobalHeader({ right, infoBar }) {
 
         <div style={{ flex: 1 }} />
 
-        {/* Right slot — About link + page-specific content */}
+        {/* Right slot — Tutorial + About + page-specific content */}
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          <button
+            onClick={startTutorial}
+            title="Guided tour of the Random Forest visualizer"
+            style={{
+              background: "none", border: "none", cursor: "pointer",
+              padding: 0, color: C.dim, fontSize: 13, fontWeight: 500,
+              transition: "color 0.15s", fontFamily: "inherit",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = C.text; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = C.dim; }}
+          >
+            Tutorial
+          </button>
           <button
             onClick={() => navigate("/about")}
             style={{

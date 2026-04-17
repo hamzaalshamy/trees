@@ -1272,7 +1272,6 @@ export default function AdaBoostViz() {
                 const isCurrent   = rIdx === curRound;
                 const isLocked    = rIdx > completedCount;
                 const isNext      = rIdx === completedCount && !isComplete;
-                const canDrag     = !isLocked && !growing && !buildProgress;
                 const inSel       = dragRange !== null
                   && rIdx >= Math.min(dragRange.start, dragRange.end)
                   && rIdx <= Math.max(dragRange.start, dragRange.end);

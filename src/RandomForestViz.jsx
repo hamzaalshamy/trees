@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, useImperativeHandle } from "react";
 import { createPortal } from "react-dom";
 import { useLocation } from "react-router-dom";
 import Papa from "papaparse";
@@ -13,6 +13,7 @@ import DataModal from "./DataModal";
 import { NA_VALS, detectNAs, detectTaskType } from "./dataUtils";
 import { classColor, flattenNodes, getTreePrediction, fmtThresh, LEAF_SPACING, X_PAD, Y_GAP, computeTreeWidth, computePositions, formatRegVal, getSamplePath, formatSampleLabel, PATH_COLOR, Edge, TreeNode } from "./TreeComponents";
 import { tooltipPosition } from "./tooltipUtils";
+import { useTutorial } from "./Tutorial";
 
 // ─── Feature-subset options ────────────────────────────────────────────────────
 const FEATURE_SUBSET_OPTIONS = {
@@ -87,7 +88,7 @@ function AlgoTooltip({ mode }) {
 }
 
 // ─── Main component ────────────────────────────────────────────────────────────
-export default function RandomForestViz({ mode = "random-forest" }) {
+export default function RandomForestViz({ mode = "random-forest", tutorialRef = null }) {
   const lockedNEstimators = mode === "decision-tree" ? 1 : null;
   const lockedMaxFeatures = (mode === "decision-tree" || mode === "bagging") ? "all" : null;
 
@@ -113,8 +114,8 @@ export default function RandomForestViz({ mode = "random-forest" }) {
   const [maxDepth, setMaxDepth]         = useState(3);
   const [maxDepthStr, setMaxDepthStr]   = useState("3");
   const [featureSubset, setFeatureSubset] = useState(lockedMaxFeatures ?? "sqrt");
-  const [nEstimators, setNEstimators]   = useState(lockedNEstimators ?? 3);
-  const [nEstimatorsStr, setNEstimatorsStr] = useState(String(lockedNEstimators ?? 3));
+  const [nEstimators, setNEstimators]   = useState(lockedNEstimators ?? 10);
+  const [nEstimatorsStr, setNEstimatorsStr] = useState(String(lockedNEstimators ?? 10));
   const [trees, setTrees]               = useState([]);
   const [bootstrapInfo, setBootstrapInfo] = useState([]);
   const [curTree, setCurTree]           = useState(0);
@@ -134,6 +135,9 @@ export default function RandomForestViz({ mode = "random-forest" }) {
   const [resetTooltip, setResetTooltip]       = useState(null); // { x, y }
   const [dragRange, setDragRange]             = useState(null); // { start, end } | null
   const [hintDismissed, setHintDismissed]     = useState(false);
+  // Incremented by resetAndSetParams to guarantee the tutorialRebuild effect fires
+  // even when hyperparams don't change (buildForest would be the same ref).
+  const [tutorialBuildTick, setTutorialBuildTick] = useState(0);
   const [scrollHint, setScrollHint]           = useState(false); // "Scroll down to predict ↓" hint
   const [lockedParamTooltip, setLockedParamTooltip] = useState(null); // { key, x, y }
   const [rfDropOpen,  setRfDropOpen]  = useState(false);
@@ -160,6 +164,12 @@ export default function RandomForestViz({ mode = "random-forest" }) {
   panLive.current  = pan;
 
   const subsetSize = FEATURE_SUBSET_OPTIONS[featureSubset].fn(activeFeatures.length);
+
+  // ── Tutorial integration ───────────────────────────────────────────────────
+  const tutorial = useTutorial();
+  // Ref flag: set by resetAndSetParams() so the effect below triggers a rebuild
+  // once the new state values have propagated to the buildForestWithData closure.
+  const tutorialRebuildRef = useRef(false);
 
   // Inject design-system keyframes once
   useEffect(() => {
@@ -405,6 +415,48 @@ export default function RandomForestViz({ mode = "random-forest" }) {
     if (growing) return;
     for (let i = 0; i < trees.length; i++) instantComplete(i);
   }, [growing, trees, instantComplete]);
+
+  // Expose imperative methods to the Tutorial overlay via tutorialRef
+  // (placed here, after all referenced callbacks are declared — avoids TDZ)
+  useImperativeHandle(tutorialRef, () => ({
+    resetAndSetParams({ maxDepth: md, featureSubset: fs, nEstimators: ne, speed: sp }) {
+      if (growRef.current) { cancelRef.current = true; growRef.current = false; setGrowing(false); }
+      setMaxDepth(md);   setMaxDepthStr(String(md));
+      setFeatureSubset(fs);
+      setNEstimators(ne); setNEstimatorsStr(String(ne));
+      setSpeed(sp);
+      setTrees([]); setBootstrapInfo([]); setTreeStates({}); setCurTree(0);
+      setSelectedSampleIdx(null); setHintDismissed(false);
+      // Always increment the tick so the rebuild effect fires even when
+      // the new hyperparams are identical to the current ones (buildForest
+      // would not change refs, so the effect would never fire without this).
+      tutorialRebuildRef.current = true;
+      setTutorialBuildTick(t => t + 1);
+    },
+    completeAll()        { growAllInstant(); },
+    stepOnce() {
+      // Jump to the next committed step (phase 2 of the current node) so the user
+      // sees the feature/threshold revealed and the Feature Pool fully colored in
+      // one key press, rather than landing on the intermediate phase-1 "?" state.
+      const steps = getSteps(curTree);
+      const currentIdx = getTS(curTree).stepIdx;
+      let nextIdx = currentIdx + 1;
+      while (nextIdx < steps.length && !steps[nextIdx].commit) nextIdx++;
+      if (nextIdx < steps.length) goToStep(curTree, nextIdx);
+    },
+    selectRandomSample() { setSelectedSampleIdx(Math.floor(Math.random() * activeData.length)); },
+    scrollToPrediction() { predSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); },
+  }), [growAllInstant, activeData.length, curTree, getTS, goToStep, getSteps]);
+
+  // Rebuild after resetAndSetParams. Uses tutorialBuildTick so this fires even when
+  // buildForest didn't change (hyperparams already matched the target values).
+  // tutorialRebuildRef guards against spurious fires from buildForest changing
+  // independently (e.g. user changes a param control after the tutorial rebuild).
+  useEffect(() => {
+    if (!tutorialRebuildRef.current) return;
+    tutorialRebuildRef.current = false;
+    buildForest();
+  }, [tutorialBuildTick, buildForest]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Keyboard handler ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -898,7 +950,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
         position: "relative", zIndex: 20,
       }}>
         {/* Model hyperparameters */}
-        <div style={{ display: "flex", alignItems: "flex-end", gap: 12, flex: 1, flexWrap: "wrap" }}>
+        <div data-tutorial="hyperparams" style={{ display: "flex", alignItems: "flex-end", gap: 12, flex: 1, flexWrap: "wrap" }}>
           {/* Max depth — always unlocked */}
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <label style={{ fontSize: 9, color: C.muted, fontWeight: 400 }}>Max depth</label>
@@ -1002,19 +1054,23 @@ export default function RandomForestViz({ mode = "random-forest" }) {
               Stop
             </button>
           ) : (
-            <button disabled={!!buildProgress} onClick={() => { setHintDismissed(true); autoGrowAll(); }}
+            <button data-tutorial="grow-button" disabled={!!buildProgress} onClick={() => { setHintDismissed(true); autoGrowAll(); }}
+              title={tutorial.active && (tutorial.stepIdx === 2 || tutorial.stepIdx === 4) ? "Use → during the tutorial" : undefined}
               style={{ padding: "7px 18px", borderRadius: 8, border: "none",
                 background: buildProgress ? C.border : `linear-gradient(135deg,${C.accent},#d97706)`,
                 color: buildProgress ? C.dim : "#000",
                 fontSize: 11, fontFamily: "inherit", cursor: buildProgress ? "default" : "pointer",
-                fontWeight: 600, transition: "box-shadow 0.15s, filter 0.15s" }}
+                fontWeight: 600, transition: "box-shadow 0.15s, filter 0.15s, opacity 0.15s",
+                opacity: (tutorial.active && (tutorial.stepIdx === 2 || tutorial.stepIdx === 4)) ? 0.4 : 1,
+                pointerEvents: (tutorial.active && (tutorial.stepIdx === 2 || tutorial.stepIdx === 4)) ? "none" : undefined,
+              }}
               onMouseEnter={e => { if (!buildProgress) { e.currentTarget.style.boxShadow = "0 0 12px rgba(245,158,11,0.3)"; e.currentTarget.style.filter = "brightness(1.1)"; } }}
               onMouseLeave={e => { e.currentTarget.style.boxShadow = "none"; e.currentTarget.style.filter = "none"; }}>
               Grow
             </button>
           )}
 
-          <button disabled={!trees.length || growing || !!buildProgress} onClick={growAllInstant}
+          <button data-tutorial="complete-all" disabled={!trees.length || growing || !!buildProgress} onClick={growAllInstant}
             style={{ padding: "7px 18px", borderRadius: 8, border: "none",
               background: !trees.length || growing || buildProgress ? C.border : `linear-gradient(135deg,${C.accent},#d97706)`,
               color: !trees.length || growing || buildProgress ? C.dim : "#000",
@@ -1069,7 +1125,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
                   boxShadow: `0 0 8px ${C.accent}33`,
                 }} />
               )}
-              <div ref={tabScrollRef} style={{
+              <div data-tutorial="tree-tabs" ref={tabScrollRef} style={{
                 display: "flex", alignItems: "center", gap: 3,
                 overflowX: "auto", padding: "6px 0",
                 scrollbarWidth: "none", msOverflowStyle: "none",
@@ -1214,7 +1270,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
       <div style={{ display: "flex", alignItems: "stretch", height: Math.min(500, svgH + 40) }}>
 
       {/* SVG canvas */}
-      <div ref={canvasRef}
+      <div ref={canvasRef} data-tutorial="tree-canvas"
         onMouseDown={onMouseDown} onMouseMove={onMouseMove}
         onMouseUp={onMouseUp} onMouseLeave={onMouseUp}
         style={{
@@ -1225,32 +1281,44 @@ export default function RandomForestViz({ mode = "random-forest" }) {
           position: "relative",
         }}>
 
-        {/* Welcome overlay — shown on step 0, dismissed on first action or when any tree completes */}
-        {!hintDismissed && completedTrees.length === 0 && !growing && !buildProgress && trees[0] && (
-          <div style={{
-            position: "absolute", inset: 0, display: "flex", flexDirection: "column",
-            alignItems: "center", justifyContent: "center", pointerEvents: "none",
-            zIndex: 5,
-          }}>
+        {/* Welcome overlay — shown on step 0, dismissed on first action or when any tree completes.
+            Also shown during tutorial steps 3 and 5 (indices 2 and 4) so the root "?" node and
+            this message stay visible as the coachmark layers on top. */}
+        {!hintDismissed &&
+          (!tutorial.active || tutorial.stepIdx === 2 || tutorial.stepIdx === 4) &&
+          completedTrees.length === 0 && !growing && !buildProgress && trees[0] && (() => {
+          const growDisabledByTutorial = tutorial.active && (tutorial.stepIdx === 2 || tutorial.stepIdx === 4);
+          return (
             <div style={{
-              background: "rgba(10,14,23,0.82)",
-              border: `1px solid rgba(255,255,255,0.08)`,
-              borderRadius: 16,
-              padding: "22px 32px",
-              maxWidth: 420, textAlign: "center",
-              backdropFilter: "blur(6px)",
-              boxShadow: "0 8px 40px rgba(0,0,0,0.6)",
+              position: "absolute", inset: 0, display: "flex", flexDirection: "column",
+              alignItems: "center", justifyContent: "center", pointerEvents: "none",
+              zIndex: 5,
             }}>
-              <div style={{ fontSize: 13, color: C.text, fontWeight: 600, marginBottom: 10, lineHeight: 1.5 }}>
-                Use <span style={{ color: C.accent, fontWeight: 700 }}>→</span> to step through the tree,
-                or press <span style={{ color: C.accent, fontWeight: 700 }}>▶ Grow</span> to watch it build automatically.
-              </div>
-              <div style={{ fontSize: 10.5, color: C.dim, lineHeight: 1.7 }}>
-                You can also change the dataset above to visualize on your own data.
+              <div style={{
+                background: "rgba(10,14,23,0.82)",
+                border: `1px solid rgba(255,255,255,0.08)`,
+                borderRadius: 16,
+                padding: "22px 32px",
+                maxWidth: 420, textAlign: "center",
+                backdropFilter: "blur(6px)",
+                boxShadow: "0 8px 40px rgba(0,0,0,0.6)",
+              }}>
+                <div style={{ fontSize: 13, color: C.text, fontWeight: 600, marginBottom: growDisabledByTutorial ? 0 : 10, lineHeight: 1.5 }}>
+                  Use <span style={{ color: C.accent, fontWeight: 700 }}>→</span> to step through the tree
+                  {!growDisabledByTutorial && (
+                    <>, or press <span style={{ color: C.accent, fontWeight: 700 }}>▶ Grow</span> to watch it build automatically.</>
+                  )}
+                  {growDisabledByTutorial && "."}
+                </div>
+                {!growDisabledByTutorial && (
+                  <div style={{ fontSize: 10.5, color: C.dim, lineHeight: 1.7 }}>
+                    You can also change the dataset above to visualize on your own data.
+                  </div>
+                )}
               </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         <svg width={treeWidth} height={svgH}
           style={{ transform: `translate(${pan.x}px,${pan.y}px) scale(${zoom})`, transformOrigin: "0 0", display: "block" }}>
@@ -1341,7 +1409,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
       {/* end SVG canvas */}
 
       {/* ── Calculations sidebar ──────────────────────────────────────────── */}
-      <div style={{
+      <div data-tutorial="calculations-panel" style={{
         width: calcExpanded ? calcPanelWidth : 28,
         flexShrink: 0,
         borderLeft: "1px solid rgba(255,255,255,0.05)",
@@ -1652,7 +1720,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
       </div>
 
       {/* Feature pool */}
-      <div style={{ padding: "12px 16px 6px" }}>
+      <div data-tutorial="feature-pool" style={{ padding: "12px 16px 6px" }}>
         <div style={{
           background: "#0c1018", borderRadius: 14,
           boxShadow: "0 2px 16px rgba(0,0,0,0.35), inset 0 0 0 1px rgba(255,255,255,0.04)",
@@ -1807,7 +1875,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
             )}
 
             {/* ── Sample selector ───────────────────────────────────────────── */}
-            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+            <div data-tutorial="sample-selector" style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
               <div style={{
                 position: "relative", display: "flex", alignItems: "center",
                 borderRadius: 16, background: "rgba(255,255,255,0.04)",
@@ -2031,7 +2099,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
               })();
 
               return (
-                <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 14 }}>
+                <div data-tutorial="ensemble-vote" style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 14 }}>
                   {ensembleCard}
                   {treeCards}
                 </div>
@@ -2040,7 +2108,7 @@ export default function RandomForestViz({ mode = "random-forest" }) {
 
             {/* ── Metrics cards ───────────────────────────────────────────────── */}
             {activeTaskType === "classification" && (forestAccuracy !== null || avgOobAccuracy !== null) && (
-              <div style={{ display: "flex", gap: 10, marginTop: selectedSample ? 4 : 0 }}>
+              <div data-tutorial="accuracy-cards" style={{ display: "flex", gap: 10, marginTop: selectedSample ? 4 : 0 }}>
                 {forestAccuracy !== null && (
                   <div style={{
                     flex: 1, padding: "12px 14px", borderRadius: 12,

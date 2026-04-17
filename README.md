@@ -18,16 +18,17 @@ Trees covers Decision Trees, Bagging, Random Forest, and AdaBoost — each visua
 
 Step through tree construction one split at a time, with Gini impurity scores shown for every candidate feature at each node. The feature pool highlights which features were sampled in the random subset, and marks whether the chosen split was the true global best or a random-subset compromise.
 
-<table>
-  <tr>
-    <td width="50%"><img src="docs/images/rf_split.png" alt="Single split"/></td>
-    <td width="50%"><img src="docs/images/rf_tree_full.png" alt="Full tree"/></td>
-  </tr>
-  <tr>
-    <td align="center"><sub>Single split — feature pool, Gini per candidate, chosen split</sub></td>
-    <td align="center"><sub>Full tree — complete tree grown to max depth</sub></td>
-  </tr>
-</table>
+<p align="center">
+  <img src="docs/images/rf_split.png" alt="Single split" width="90%"/>
+  <br/>
+  <sub><i>Single split — feature pool, Gini per candidate, chosen split</i></sub>
+</p>
+
+<p align="center">
+  <img src="docs/images/rf_tree_full.png" alt="Full tree" width="90%"/>
+  <br/>
+  <sub><i>Full tree — complete tree grown to max depth</i></sub>
+</p>
 
 ---
 
@@ -35,16 +36,17 @@ Step through tree construction one split at a time, with Gini impurity scores sh
 
 Once the forest is built, pick any sample from the dataset and watch all trees cast their votes. The ensemble's final prediction is shown alongside the true label, and you can trace the exact decision path any individual tree took to reach its leaf.
 
-<table>
-  <tr>
-    <td width="50%"><img src="docs/images/rf_prediction.png" alt="Ensemble vote"/></td>
-    <td width="50%"><img src="docs/images/rf_prediction_path.png" alt="Decision path"/></td>
-  </tr>
-  <tr>
-    <td align="center"><sub>Ensemble vote — all trees weigh in on one sample</sub></td>
-    <td align="center"><sub>Decision path — trace one tree's journey to its prediction</sub></td>
-  </tr>
-</table>
+<p align="center">
+  <img src="docs/images/rf_prediction.png" alt="Ensemble vote" width="90%"/>
+  <br/>
+  <sub><i>Ensemble vote — all trees weigh in on one sample</i></sub>
+</p>
+
+<p align="center">
+  <img src="docs/images/rf_prediction_path.png" alt="Decision path" width="90%"/>
+  <br/>
+  <sub><i>Decision path — trace one tree's journey to its prediction</i></sub>
+</p>
 
 ---
 
@@ -52,7 +54,9 @@ Once the forest is built, pick any sample from the dataset and watch all trees c
 
 Trees isn't limited to the built-in datasets — upload any CSV and the visualizer adapts instantly. It auto-detects columns, lets you choose the target variable, select classification or regression, and configure how missing values are handled.
 
-![CSV Upload](docs/images/csv_upload.png)
+<p align="center">
+  <img src="docs/images/csv_upload.png" alt="CSV Upload" width="55%"/>
+</p>
 
 ---
 

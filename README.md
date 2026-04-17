@@ -73,7 +73,7 @@ Trees isn't limited to the built-in datasets — upload any CSV and the visualiz
 ## Running Locally
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/trees.git
+git clone https://github.com/hamzaalshamy/trees.git
 cd trees
 npm install
 npm run dev

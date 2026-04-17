@@ -1,62 +1,76 @@
 # Trees
 
-Interactive visualizer for tree-based ML algorithms. Watch decision trees, bagging, and random forests build step by step on real data.
+Interactive visualizer for tree-based ML algorithms. Watch machine learning algorithms think, step by step.
 
-[screenshot of landing page: docs/images/landing.png]
+🌐 [Live Demo](https://YOUR-VERCEL-URL.vercel.app)
 
-## What it does
+---
 
-Trees lets you watch machine learning algorithms think. Step through tree construction one node at a time, see which features are evaluated, understand why the algorithm picks each split, and watch the ensemble come together.
+## The Algorithms
 
-[screenshot of tree growing with feature pool: docs/images/tree-growing.png]
+Trees covers Decision Trees, Bagging, Random Forest, and AdaBoost — each visualized from first split to final prediction. Pick an algorithm from the menu to start exploring.
 
-### Feature selection visualization
+![Menu](docs/images/landing.png)
 
-At each split, the feature pool shows every feature's Gini impurity. Candidate features light up in orange, the chosen best turns green — and when the true best wasn't in the random subset, it highlights in red so you can see the cost of randomness.
+---
 
-[screenshot of feature pool: docs/images/feature-pool.png]
+## Watch Trees Grow
 
-### Prediction & path tracing
+Step through tree construction one split at a time, with Gini impurity scores shown for every candidate feature at each node. The feature pool highlights which features were sampled in the random subset, and marks whether the chosen split was the true global best or a random-subset compromise.
 
-Select any sample from the dataset and watch it travel through each tree in the forest. The path lights up from root to leaf, every tree casts its vote, and the majority determines the prediction.
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/rf_split.png" alt="Single split"/></td>
+    <td width="50%"><img src="docs/images/rf_tree_full.png" alt="Full tree"/></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Single split — feature pool, Gini per candidate, chosen split</sub></td>
+    <td align="center"><sub>Full tree — complete tree grown to max depth</sub></td>
+  </tr>
+</table>
 
-[screenshot of prediction with path: docs/images/prediction.png]
+---
 
-### Bring your own data
+## Ensemble Predictions
 
-Drop any CSV file. Trees parses it in your browser, lets you pick the target column, handle missing values, select features, and choose between classification and regression. Your data never leaves your browser.
+Once the forest is built, pick any sample from the dataset and watch all trees cast their votes. The ensemble's final prediction is shown alongside the true label, and you can trace the exact decision path any individual tree took to reach its leaf.
 
-[screenshot of CSV modal: docs/images/csv-upload.png]
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/rf_prediction.png" alt="Ensemble vote"/></td>
+    <td width="50%"><img src="docs/images/rf_prediction_path.png" alt="Decision path"/></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Ensemble vote — all trees weigh in on one sample</sub></td>
+    <td align="center"><sub>Decision path — trace one tree's journey to its prediction</sub></td>
+  </tr>
+</table>
 
-## Supported algorithms
+---
 
-- **Decision Tree** — single tree, all features, no ensemble
-- **Bagging** — bootstrap ensemble, all features at each split  
-- **Random Forest** — bootstrap ensemble with random feature subsampling
-- **AdaBoost** — coming soon
-- **Gradient Boosting** — *May* come soon, but unlikely
+## Bring Your Own Data
 
-## Features
+Trees isn't limited to the built-in datasets — upload any CSV and the visualizer adapts instantly. It auto-detects columns, lets you choose the target variable, select classification or regression, and configure how missing values are handled.
 
-- Real CART algorithm with Gini impurity (classification) and MSE (regression)
-- Binary, multiclass, and regression support
-- Step-by-step animation with arrow key controls
-- Per-tree state preservation — switch between trees without losing progress
-- Bootstrap sampling with OOB accuracy
-- Two built-in datasets: Heart Disease (binary) and Music Genres (10-class)
-- CSV upload with preprocessing: missing value handling, column selection, one-hot encoding, stratified sampling
+![CSV Upload](docs/images/csv_upload.png)
 
-## Tech stack
+---
 
-React · Vite · Papaparse · Web Workers · No backend — entirely client-side
+## Built With
 
-## Run locally
+- React 19 + Vite 8
+- Web Workers for non-blocking tree construction
+- Custom CART implementation (Gini impurity, bootstrap sampling, OOB accuracy)
+- React Router v7 for multi-algorithm navigation
+- All styling inline — no CSS files or UI libraries
 
+---
+
+## Running Locally
+
+```bash
+git clone https://github.com/YOUR_USERNAME/trees.git
+cd trees
 npm install
 npm run dev
-
-Open http://localhost:5173
-
-## Built by
-
-Hamza Alshamy — hamzaalshamy.github.io
+```

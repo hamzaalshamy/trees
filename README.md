@@ -2,7 +2,7 @@
 
 Interactive visualizer for tree-based ML algorithms. Watch machine learning algorithms think, step by step.
 
-🌐 [Live Demo](https://YOUR-VERCEL-URL.vercel.app)
+🌐 [Live Demo](https://trees-hamza.vercel.app/)
 
 ---
 

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Routes, Route } from 'react-router-dom'
+import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import TaxonomyMenu from './TaxonomyMenu'
 import RandomForestViz from './RandomForestViz'
 import AdaBoostViz from './AdaBoostViz'
@@ -92,18 +92,20 @@ export default function App() {
     <>
       {isMobile && <MobileOverlay />}
       {!isMobile && (
-        <TutorialProvider>
+        <BrowserRouter>
           <TransitionProvider>
-            <Routes>
+            <TutorialProvider>
+              <Routes>
               <Route path="/" element={<TaxonomyMenu />} />
               <Route path="/decision-tree" element={<RandomForestViz mode="decision-tree" />} />
               <Route path="/bagging"       element={<RandomForestViz mode="bagging" />} />
               <Route path="/random-forest" element={<RandomForestVizWithRef mode="random-forest" />} />
               <Route path="/adaboost"      element={<AdaBoostViz />} />
               <Route path="/about"         element={<About />} />
-            </Routes>
+              </Routes>
+            </TutorialProvider>
           </TransitionProvider>
-        </TutorialProvider>
+        </BrowserRouter>
       )}
     </>
   )

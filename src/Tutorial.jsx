@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useNavigate } from "react-router-dom";
+import { usePageNavigate } from "./PageTransition";
 import { C } from "./theme";
 import { TOURS } from "./tutorialSteps";
 
@@ -255,7 +255,7 @@ export function TutorialProvider({ children }) {
   const rfRef  = useRef(null);
   const [active,   setActive]   = useState(false);
   const [stepIdx,  setStepIdx]  = useState(0);
-  const navigate = useNavigate();
+  const navigate = usePageNavigate();
 
   const steps = TOURS.randomForest;
 

@@ -1435,11 +1435,14 @@ export default function AdaBoostViz() {
           {/* Sample Weights chart */}
           <div style={{ flexShrink: 0, padding: "10px 12px" }}>
             <div style={{ fontSize: 9, fontWeight: 600, color: C.dim, textTransform: "uppercase",
-              letterSpacing: "0.06em", marginBottom: 6 }}>
+              letterSpacing: "0.06em", marginBottom: 2 }}>
               Sample Weights
               {currentRoundData && <span style={{ fontWeight: 400, marginLeft: 6, textTransform: "none" }}>
                 R{curRound + 1}
               </span>}
+            </div>
+            <div style={{ fontSize: 9, color: C.dimmer, marginBottom: 6, lineHeight: 1.4 }}>
+              Each bar = one training sample · height = weight in next round
             </div>
             {displayWeights ? (
               <>

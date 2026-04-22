@@ -510,7 +510,7 @@ export default function AdaBoostViz() {
 
   // ── Phase advance/retreat ────────────────────────────────────────────────────
   const advanceStep = useCallback(() => {
-    if (buildProgress || growing || roundPhase === 4) return;
+    if (buildProgress || growing) return;
     setHintDismissed(true);
 
     if (roundPhase === -1 || roundPhase === 0) {
@@ -528,10 +528,11 @@ export default function AdaBoostViz() {
     if (roundPhase === 2) { setRoundPhase(3); return; }
     if (roundPhase === 3) {
       setRoundPhase(4);
-      setTimeout(() => {
-        setRoundPhase(5);
-        setCompletedCount(c => Math.max(c, curRound + 1));
-      }, 600);
+      return;
+    }
+    if (roundPhase === 4) {
+      setRoundPhase(5);
+      setCompletedCount(c => Math.max(c, curRound + 1));
       return;
     }
     if (roundPhase === 5) {
@@ -546,7 +547,7 @@ export default function AdaBoostViz() {
   }, [buildProgress, growing, roundPhase, curRound, roundData, treeStates, getSteps, goToStep]);
 
   const retreatStep = useCallback(() => {
-    if (buildProgress || growing || roundPhase === 4) return;
+    if (buildProgress || growing) return;
     if (roundPhase === 1) {
       const ts = getTS(curRound);
       if (ts.stepIdx > 0)       goToStep(curRound, ts.stepIdx - 1); // normal backward step
@@ -556,6 +557,7 @@ export default function AdaBoostViz() {
     }
     if (roundPhase === 2) { setRoundPhase(1); return; }
     if (roundPhase === 3) { setRoundPhase(2); return; }
+    if (roundPhase === 4) { setRoundPhase(3); return; }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [buildProgress, growing, roundPhase, curRound, getTS, goToStep, setTS]);
 
@@ -1856,39 +1858,67 @@ export default function AdaBoostViz() {
               )}
 
               {/* Phase 3: Error + alpha */}
-              {roundPhase >= 3 && currentRoundData && (
-                <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingRight: 10, paddingLeft: 6 }}>
-                  <div style={{ padding: "8px 10px", borderRadius: 10, background: "rgba(255,255,255,0.03)",
-                    border: "1px solid rgba(255,255,255,0.08)", fontSize: 9, fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.85 }}>
-                    <div style={{ color: C.orange }}>
-                      ε = Σ wᵢ × 1[mᵢ] = <span style={{ fontWeight: 700 }}>{currentRoundData.error.toFixed(4)}</span>
+              {roundPhase >= 3 && currentRoundData && (() => {
+                const misclassifiedCount = currentRoundData.misclassified.filter(m => m).length;
+                const isUniform = curRound === 0;
+                const uniformWeight = 1 / activeData.length;
+                const ratio = (1 - currentRoundData.error) / currentRoundData.error;
+                return (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingRight: 10, paddingLeft: 6 }}>
+                    {/* ε block */}
+                    <div style={{ padding: "8px 10px", borderRadius: 10, background: "rgba(255,255,255,0.03)",
+                      border: "1px solid rgba(255,255,255,0.08)", fontSize: 9, fontFamily: "'JetBrains Mono',monospace", lineHeight: 2 }}>
+                      <div style={{ color: C.orange }}>ε = Σ wᵢ × 1[mᵢ]</div>
+                      {isUniform ? (
+                        <div style={{ color: C.orange }}>
+                          ε = {uniformWeight.toFixed(4)} × {misclassifiedCount}
+                        </div>
+                      ) : (
+                        <div style={{ color: C.orange }}>
+                          ε = sum of {misclassifiedCount} misclassified weights
+                        </div>
+                      )}
+                      <div style={{ color: C.orange, fontWeight: 700 }}>
+                        ε = {currentRoundData.error.toFixed(4)}
+                      </div>
+                      <div style={{ color: C.dim, fontSize: 8, marginTop: 2 }}>weighted misclassification rate</div>
                     </div>
-                    <div style={{ color: C.dim, fontSize: 8, marginTop: 2 }}>weighted misclassification rate</div>
-                  </div>
-                  <div style={{ padding: "8px 10px", borderRadius: 10, background: `${C.purple}0d`,
-                    border: `1px solid ${C.purple}33`, fontSize: 9, fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.85 }}>
-                    <div style={{ color: C.purple }}>α = ½ ln((1−ε)/ε)</div>
-                    <div style={{ color: C.purple, fontWeight: 700 }}>
-                      α = ½ ln({((1 - currentRoundData.error) / currentRoundData.error).toFixed(2)}) = {currentRoundData.alpha}
+                    {/* α block */}
+                    <div style={{ padding: "8px 10px", borderRadius: 10, background: `${C.purple}0d`,
+                      border: `1px solid ${C.purple}33`, fontSize: 9, fontFamily: "'JetBrains Mono',monospace", lineHeight: 2 }}>
+                      <div style={{ color: C.purple }}>α = ½ ln((1−ε)/ε)</div>
+                      <div style={{ color: C.purple }}>
+                        α = ½ ln((1−{currentRoundData.error.toFixed(4)})/{currentRoundData.error.toFixed(4)})
+                      </div>
+                      <div style={{ color: C.purple }}>
+                        α = ½ ln({ratio.toFixed(2)})
+                      </div>
+                      <div style={{ color: C.purple, fontWeight: 700 }}>
+                        α = {currentRoundData.alpha}
+                      </div>
+                      <div style={{ color: C.dim, fontSize: 8, marginTop: 2 }}>tree weight — higher α means better learner</div>
                     </div>
-                    <div style={{ color: C.dim, fontSize: 8, marginTop: 2 }}>tree weight — higher α means better learner</div>
                   </div>
-                </div>
-              )}
+                );
+              })()}
 
               {/* Phase 4: Weight update formula */}
               {roundPhase === 4 && currentRoundData && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingRight: 10, paddingLeft: 6 }}>
                   <div style={{ fontSize: 9, color: C.muted, marginBottom: 2 }}>Updating sample weights…</div>
                   <div style={{ padding: "7px 10px", borderRadius: 10, background: `${C.green}0d`,
-                    border: `1px solid ${C.green}33`, fontSize: 8.5, fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.9 }}>
-                    <div style={{ color: C.green }}>Correct: wᵢ ← wᵢ × e^(−α)</div>
-                    <div style={{ color: C.green, opacity: 0.7 }}>× {Math.exp(-currentRoundData.alpha).toFixed(4)}</div>
+                    border: `1px solid ${C.green}33`, fontSize: 8.5, fontFamily: "'JetBrains Mono',monospace", lineHeight: 2 }}>
+                    <div style={{ color: C.green }}>Correct samples:</div>
+                    <div style={{ color: C.green }}>wᵢ ← wᵢ × e^(−α)</div>
+                    <div style={{ color: C.green }}>wᵢ ← wᵢ × e^(−{currentRoundData.alpha})</div>
+                    <div style={{ color: C.green, fontWeight: 700 }}>wᵢ ← wᵢ × {Math.exp(-currentRoundData.alpha).toFixed(4)}</div>
                   </div>
                   <div style={{ padding: "7px 10px", borderRadius: 10, background: `${C.red}0d`,
-                    border: `1px solid ${C.red}33`, fontSize: 8.5, fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.9 }}>
-                    <div style={{ color: C.red }}>Misclassified: wᵢ ← wᵢ × e^(α)</div>
-                    <div style={{ color: C.red, opacity: 0.7 }}>× {Math.exp(currentRoundData.alpha).toFixed(4)}</div>
+                    border: `1px solid ${C.red}33`, fontSize: 8.5, fontFamily: "'JetBrains Mono',monospace", lineHeight: 2 }}>
+                    <div style={{ color: C.red }}>Misclassified samples:</div>
+                    <div style={{ color: C.red }}>wᵢ ← wᵢ × e^(α)</div>
+                    <div style={{ color: C.red }}>wᵢ ← wᵢ × e^({currentRoundData.alpha})</div>
+                    <div style={{ color: C.red, fontWeight: 700 }}>wᵢ ← wᵢ × {Math.exp(currentRoundData.alpha).toFixed(4)}</div>
                   </div>
                   <div style={{ fontSize: 8, color: C.dim }}>Then normalize so Σwᵢ = 1</div>
                 </div>

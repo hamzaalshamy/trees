@@ -2,10 +2,9 @@ import { C } from "./theme";
 import GlobalHeader from "./GlobalHeader";
 
 const PARAGRAPHS = [
-  "I've always found that building visualizations helps me truly understand a concept. Breaking a model down to its components — watching it select features, compute impurity, partition data — makes the learning stick in a way that reading equations or documentation alone never does.",
-  "I've been doing this for a while for my own learning. With increasingly capable tools like Claude Code, it's become much easier to extract the visuals I have in my mind into working code in a short period of time.",
-  "I thought it was worth sharing these visualizations for anyone learning about tree-based methods. The goal is simple: let you actually see how these models are built, step by step, and organize the relationships between different tree-based methods so the whole family of algorithms clicks together.",
-  "Trees is an ongoing project. More algorithms and features are on the way.",
+  "I've always found that building visualizations is helpful in understanding a concept, especially when you break the visualization into steps and can see how different components relate to one another.",
+  "I've been doing this for a while for my own learning, and now with increasingly capable tools and LLMs, it's become much easier to extract the visuals I have in my head into working code.",
+  "I thought it was worth sharing these visualizations for anyone learning about tree-based methods. The goal is to let you see how these models are built, step by step, and organize the relationships between different tree-based methods so the whole family of algorithms clicks together.",
 ];
 
 export default function About() {
@@ -52,7 +51,7 @@ export default function About() {
                 margin: 0,
                 fontSize: 13,
                 lineHeight: 1.85,
-                color: i === PARAGRAPHS.length - 1 ? C.dim : C.text,
+                color: C.text,
               }}
             >
               {p}

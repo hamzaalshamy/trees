@@ -183,7 +183,10 @@ export function TreeNode({ node, show, phase, pos, allClasses, onPath, sampleAct
     const vis = phase >= 1 ? 1 : 0;
     const gStyle = {
       opacity: dimmed ? 0.2 : vis, transition: "opacity .45s ease-out",
-      transformOrigin: `${x}px ${y}px`, animation: vis ? "nodeIn 0.35s ease-out" : "none",
+      transformOrigin: `${x}px ${y}px`,
+      // Don't play nodeIn for dimmed nodes: they should appear at opacity 0.2
+      // immediately, not animate from 0→1 then snap back to 0.2.
+      animation: (vis && !dimmed) ? "nodeIn 0.35s ease-out" : "none",
     };
 
     // ── Regression leaf ──────────────────────────────────────────────────────

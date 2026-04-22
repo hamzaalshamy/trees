@@ -1579,7 +1579,9 @@ export default function AdaBoostViz() {
                   { parent: n, child: n.left,  label: `≤${fmtThresh(n.threshold)}` },
                   { parent: n, child: n.right, label: `>${fmtThresh(n.threshold)}`  },
                 ]).map(({ parent, child, label }) => (
-                  <Edge key={`${parent.id}-${child.id}`}
+                  // Prefix key with curRound so React creates fresh DOM elements on
+                  // round switch instead of reusing them with stale CSS transition state.
+                  <Edge key={`${curRound}-${parent.id}-${child.id}`}
                     p1={positions[parent.id]} p2={positions[child.id]}
                     visible={visibleSet.has(parent.id) && visibleSet.has(child.id)}
                     label={label}
@@ -1587,7 +1589,7 @@ export default function AdaBoostViz() {
                     sampleActive={!!selectedSample} />
                 ))}
                 {allNodes.map(n => (
-                  <TreeNode key={n.id} node={n}
+                  <TreeNode key={`${curRound}-${n.id}`} node={n}
                     show={visibleSet.has(n.id) || (ts.nodeId === n.id && roundPhase === 1)}
                     phase={ts.nodeId === n.id && roundPhase === 1 ? ts.phase : 2}
                     pos={positions[n.id]} allClasses={allClasses}

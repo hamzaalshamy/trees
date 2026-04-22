@@ -1342,7 +1342,9 @@ export default function RandomForestViz({ mode = "random-forest", tutorialRef = 
             const edgeLOnPath = samplePath.has(node.id) && samplePath.has(node.left?.id);
             const edgeROnPath = samplePath.has(node.id) && samplePath.has(node.right?.id);
             return (
-              <g key={node.id}>
+              // Prefix key with curTree so React creates fresh DOM elements on tab
+              // switch instead of reusing them with stale CSS transition state.
+              <g key={`${curTree}-${node.id}`}>
                 <Edge p1={positions[node.id]} p2={positions[node.left?.id]}  visible={show}
                   label={`≤ ${fmtThresh(node.threshold)}`}
                   onPath={edgeLOnPath} sampleActive={samplePath.size > 0} />
@@ -1355,7 +1357,7 @@ export default function RandomForestViz({ mode = "random-forest", tutorialRef = 
           {allNodes.map(node => {
             const show  = visibleSet.has(node.id);
             const phase = ts.nodeId === node.id ? ts.phase : show ? 2 : 0;
-            return <TreeNode key={node.id} node={node} show={show || ts.nodeId === node.id} phase={phase}
+            return <TreeNode key={`${curTree}-${node.id}`} node={node} show={show || ts.nodeId === node.id} phase={phase}
               pos={positions[node.id]} allClasses={classLabels}
               onPath={samplePath.has(node.id)} sampleActive={samplePath.size > 0}
               isRegression={activeTaskType === "regression"} />;

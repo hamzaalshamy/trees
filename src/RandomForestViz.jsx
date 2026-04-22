@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo, useImperativeHandle } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useImperativeHandle } from "react";
 import { createPortal } from "react-dom";
 import { useLocation } from "react-router-dom";
 import Papa from "papaparse";
@@ -524,7 +524,7 @@ export default function RandomForestViz({ mode = "random-forest", tutorialRef = 
     setPan({ x: (canvasW - tw) / 2, y: 20 });
   }, [trees]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     centerTree(curTree);
   }, [curTree, trees, centerTree]);
 

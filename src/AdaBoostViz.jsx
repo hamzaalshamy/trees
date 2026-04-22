@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { useLocation } from "react-router-dom";
 import Papa from "papaparse";
@@ -757,7 +757,7 @@ export default function AdaBoostViz() {
   }, [calcExpanded, calcPanelWidth]);
 
   // Center tree when round changes
-  useEffect(() => {
+  useLayoutEffect(() => {
     const tree = roundData[curRound]?.tree;
     const el   = canvasRef.current;
     if (!el || !tree) return;

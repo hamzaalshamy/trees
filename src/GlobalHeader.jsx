@@ -63,11 +63,11 @@ export default function GlobalHeader({ right, infoBar }) {
             title="Guided tour of the Random Forest visualizer"
             style={{
               background: "none", border: "none", cursor: "pointer",
-              padding: 0, color: C.dim, fontSize: 13, fontWeight: 500,
+              padding: 0, color: C.text, fontSize: 13, fontWeight: 500,
               transition: "color 0.15s", fontFamily: "inherit",
             }}
             onMouseEnter={(e) => { e.currentTarget.style.color = C.text; }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = C.dim; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = C.text; }}
           >
             Tutorial
           </button>
@@ -75,11 +75,11 @@ export default function GlobalHeader({ right, infoBar }) {
             onClick={() => navigate("/about")}
             style={{
               background: "none", border: "none", cursor: "pointer",
-              padding: 0, color: C.dim, fontSize: 13, fontWeight: 500,
+              padding: 0, color: C.text, fontSize: 13, fontWeight: 500,
               transition: "color 0.15s", fontFamily: "inherit",
             }}
             onMouseEnter={(e) => { e.currentTarget.style.color = C.text; }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = C.dim; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = C.text; }}
           >
             About
           </button>

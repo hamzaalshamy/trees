@@ -322,9 +322,11 @@ export default function AdaBoostViz() {
   const [cursorGrabbing, setCursorGrabbing] = useState(false);
   const isDragging = useRef(false);
   const dragStart  = useRef({ x: 0, y: 0, px: 0, py: 0 });
-  const canvasRef  = useRef(null);
-  const zoomLive   = useRef(1);
-  const panLive    = useRef({ x: 0, y: 0 });
+  const canvasRef     = useRef(null);
+  const zoomLive      = useRef(1);
+  const panLive       = useRef({ x: 0, y: 0 });
+  // Track previous curRound to distinguish a round switch from a round-data update.
+  const prevCurRoundRef = useRef(null);
   zoomLive.current = zoom;
   panLive.current  = pan;
 
@@ -764,8 +766,19 @@ export default function AdaBoostViz() {
     if (!el || !tree) return;
     const canvasW = el.getBoundingClientRect().width;
     const tw = computeTreeWidth(tree);
-    const z  = zoomLive.current;
-    setPan({ x: (canvasW - tw * z) / 2, y: 20 });
+
+    const roundSwitched = prevCurRoundRef.current !== curRound;
+    prevCurRoundRef.current = curRound;
+
+    if (roundSwitched) {
+      // Round tab switch: reset zoom so each round starts at a clean default view.
+      setZoom(1);
+      setPan({ x: (canvasW - tw) / 2, y: 20 });
+    } else {
+      // New round data arrived (same round): center at current zoom.
+      const z = zoomLive.current;
+      setPan({ x: (canvasW - tw * z) / 2, y: 20 });
+    }
   }, [curRound, roundData]);
 
   // File handling

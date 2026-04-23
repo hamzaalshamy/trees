@@ -158,8 +158,10 @@ export default function RandomForestViz({ mode = "random-forest", tutorialRef = 
   const dragStart  = useRef({ x: 0, y: 0, px: 0, py: 0 });
   const canvasRef  = useRef(null);
   // Mutable refs so the wheel handler (registered once, deps=[]) always reads live values.
-  const zoomLive = useRef(1);
-  const panLive  = useRef({ x: 0, y: 0 });
+  const zoomLive    = useRef(1);
+  const panLive     = useRef({ x: 0, y: 0 });
+  // Track previous curTree so we can distinguish a tab switch from a tree update.
+  const prevCurTreeRef = useRef(null);
   zoomLive.current = zoom;
   panLive.current  = pan;
 
@@ -527,7 +529,16 @@ export default function RandomForestViz({ mode = "random-forest", tutorialRef = 
   }, [trees]);
 
   useLayoutEffect(() => {
-    centerTree(curTree);
+    const tabSwitched = prevCurTreeRef.current !== curTree;
+    prevCurTreeRef.current = curTree;
+    if (tabSwitched) {
+      // Tab switch: reset zoom so the new tree starts at a clean default view.
+      setZoom(1);
+      centerTree(curTree, 1);
+    } else {
+      // New tree arrived from worker (same tab): center at current zoom.
+      centerTree(curTree);
+    }
   }, [curTree, trees, centerTree]);
 
   // ── Drag-to-complete global mouseup ───────────────────────────────────────

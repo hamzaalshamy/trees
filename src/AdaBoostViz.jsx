@@ -756,14 +756,16 @@ export default function AdaBoostViz() {
     document.addEventListener("mouseup", onUp);
   }, [calcExpanded, calcPanelWidth]);
 
-  // Center tree when round changes
+  // Center tree when round changes.
+  // pan.x = canvasW/2 - (treeWidth/2)*zoom = (canvasW - treeWidth*zoom) / 2
   useLayoutEffect(() => {
     const tree = roundData[curRound]?.tree;
     const el   = canvasRef.current;
     if (!el || !tree) return;
     const canvasW = el.getBoundingClientRect().width;
     const tw = computeTreeWidth(tree);
-    setPan({ x: (canvasW - tw) / 2, y: 20 });
+    const z  = zoomLive.current;
+    setPan({ x: (canvasW - tw * z) / 2, y: 20 });
   }, [curRound, roundData]);
 
   // File handling

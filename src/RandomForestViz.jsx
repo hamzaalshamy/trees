@@ -515,13 +515,15 @@ export default function RandomForestViz({ mode = "random-forest", tutorialRef = 
 
   // ── Tree centering ─────────────────────────────────────────────────────────
   // Centers the root node horizontally in the visible canvas area.
-  // Root is always at SVG x = treeWidth/2, so pan.x = (canvasW - treeWidth) / 2.
-  const centerTree = useCallback((treeIdx) => {
+  // Root is always at SVG x = treeWidth/2.
+  // With zoom: root screen x = pan.x + (treeWidth/2)*zoom, so
+  //   pan.x = canvasW/2 - (treeWidth/2)*zoom = (canvasW - treeWidth*zoom) / 2
+  const centerTree = useCallback((treeIdx, z = zoomLive.current) => {
     const el = canvasRef.current;
     if (!el || !trees[treeIdx]) return;
     const canvasW = el.getBoundingClientRect().width;
     const tw = computeTreeWidth(trees[treeIdx]);
-    setPan({ x: (canvasW - tw) / 2, y: 20 });
+    setPan({ x: (canvasW - tw * z) / 2, y: 20 });
   }, [trees]);
 
   useLayoutEffect(() => {
@@ -1397,7 +1399,7 @@ export default function RandomForestViz({ mode = "random-forest", tutorialRef = 
             )
           )}
           <div style={{ height: 1, width: "80%", background: C.border, margin: "2px 0" }} />
-          <button onClick={() => { setZoom(1); centerTree(curTree); }} style={{
+          <button onClick={() => { setZoom(1); centerTree(curTree, 1); }} style={{
             background: "none", border: "none", cursor: "pointer",
             color: C.dim, fontSize: 9, fontFamily: "inherit",
             padding: "3px 6px", borderRadius: 5,
